@@ -30,6 +30,7 @@ mod imp {
     pub const INGAME_BASE: f32 = 620.0;
     pub const ASPECT: f64 = 16.0 / 9.0;
     pub const MIN_PAGE_WIDTH: i32 = 640;
+    pub const MIN_PAGE_HEIGHT: i32 = 360;
     pub const PAGE_SIZE: (i32, i32) = (1280, 720);
 
     const INSTANCE_MUTEX: &str = "Local\\Draftly";
@@ -248,6 +249,35 @@ mod imp {
         }
     }
 
+    pub fn is_valid_panel_rect(r: Rect) -> bool {
+        r.width() >= MIN_PAGE_WIDTH && r.height() >= MIN_PAGE_HEIGHT && on_screen(r)
+    }
+
+    pub fn primary_dpi_scale() -> f32 {
+        let area = primary_work_area();
+        dpi_scale(Placement {
+            x: area.left,
+            y: area.top,
+            width: area.width().max(1),
+            height: area.height().max(1),
+            scale: 1.0,
+        })
+        .max(1.0)
+    }
+
+    pub fn default_panel_size_for(work: Rect, dpi: f32) -> (f32, f32) {
+        let dpi = dpi.max(1.0);
+        let max_w = (work.width() as f32 / dpi) * 0.9;
+        let max_h = (work.height() as f32 / dpi) * 0.9;
+        let aspect = ASPECT as f32;
+        let w = (PAGE_SIZE.0 as f32)
+            .min(max_w)
+            .min(max_h * aspect)
+            .max(MIN_PAGE_WIDTH as f32);
+        let h = w / aspect;
+        (w, h)
+    }
+
     pub fn place_ingame(game: Rect, size: f32) -> Placement {
         let scale = (game.height() as f32 / INGAME_REF_HEIGHT) * size;
         let width = (INGAME_BASE * scale).round().max(200.0) as i32;
@@ -442,7 +472,7 @@ mod imp {
             let mut cr: RECT = std::mem::zeroed();
             GetClientRect(hwnd, &mut cr);
             let wr = window_rect(hwnd as isize);
-            (wr.width() - cr.right, wr.height() - cr.bottom)
+            ((wr.width() - cr.right).max(0), (wr.height() - cr.bottom).max(0))
         }
     }
 
@@ -593,7 +623,25 @@ mod imp {
     pub fn is_normal(_: isize) -> bool { false }
     pub fn window_rect(_: isize) -> Rect { Rect { left: 0, top: 0, right: 1280, bottom: 720 } }
     pub fn primary_work_area() -> Rect { Rect { left: 0, top: 0, right: 1920, bottom: 1080 } }
+    pub const MIN_PAGE_WIDTH: i32 = 640;
+    pub const MIN_PAGE_HEIGHT: i32 = 360;
+    pub const PAGE_SIZE: (i32, i32) = (1280, 720);
     pub fn on_screen(_: Rect) -> bool { true }
+    pub fn is_valid_panel_rect(r: Rect) -> bool {
+        r.width() >= MIN_PAGE_WIDTH && r.height() >= MIN_PAGE_HEIGHT && on_screen(r)
+    }
+    pub fn primary_dpi_scale() -> f32 { 1.0 }
+    pub fn default_panel_size_for(work: Rect, dpi: f32) -> (f32, f32) {
+        let dpi = dpi.max(1.0);
+        let max_w = (work.width() as f32 / dpi) * 0.9;
+        let max_h = (work.height() as f32 / dpi) * 0.9;
+        let aspect = 16.0_f32 / 9.0_f32;
+        let w = (PAGE_SIZE.0 as f32)
+            .min(max_w)
+            .min(max_h * aspect)
+            .max(MIN_PAGE_WIDTH as f32);
+        (w, w / aspect)
+    }
     pub fn place_ingame(_: Rect, _: f32) -> Placement { Placement { x: 0, y: 0, width: 620, height: 600, scale: 1.0 } }
     pub fn dpi_scale(_: Placement) -> f32 { 1.0 }
     pub fn set_no_activate(_: isize, _: bool) {}
@@ -611,3 +659,55 @@ mod imp {
 
 #[cfg(not(windows))]
 pub use imp::*;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_tiny_saved_panel_rect() {
+        let tiny = Rect {
+            left: 808,
+            top: 154,
+            right: 821,
+            bottom: 190,
+        };
+        assert!(!is_valid_panel_rect(tiny));
+        assert!(!is_valid_panel_rect(Rect {
+            left: 0,
+            top: 0,
+            right: MIN_PAGE_WIDTH - 1,
+            bottom: MIN_PAGE_HEIGHT,
+        }));
+        assert!(!is_valid_panel_rect(Rect {
+            left: 0,
+            top: 0,
+            right: MIN_PAGE_WIDTH,
+            bottom: MIN_PAGE_HEIGHT - 1,
+        }));
+    }
+
+    #[test]
+    fn default_panel_size_respects_dpi_and_work_area() {
+        let work_1080p = Rect {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1040,
+        };
+        let (w, h) = default_panel_size_for(work_1080p, 1.5);
+        assert!(w <= (1920.0 / 1.5) * 0.9 + 0.1);
+        assert!(h <= (1040.0 / 1.5) * 0.9 + 0.1);
+        assert!(w >= MIN_PAGE_WIDTH as f32);
+        assert!((w / h - (16.0 / 9.0)).abs() < 0.01);
+
+        let work_1440p = Rect {
+            left: 0,
+            top: 0,
+            right: 2560,
+            bottom: 1392,
+        };
+        let (w2, h2) = default_panel_size_for(work_1440p, 1.0);
+        assert_eq!((w2.round() as i32, h2.round() as i32), PAGE_SIZE);
+    }
+}
