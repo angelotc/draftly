@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 256 256">
+  <title>Draftly — Draft Cards</title>
+  <rect x="6" y="6" width="244" height="244" rx="54" fill="#211a2e"/>
+  <polygon fill="#ff8a72" points="139,68 211,110 211,155 139,197 139,170 188,142 188,123 139,95"/>
+  <path fill="#c4b5fd" fill-rule="evenodd" d="M49 55H111L170 89V167L111 201H49Z M75 81V175H104L144 152V104L104 81Z"/>
+  <polygon fill="#ff8a72" points="110,116 122,128 110,140 98,128"/>
+</svg>

@@ -1,5 +1,5 @@
 [package]
-name = "lol-companion"
+name = "draftly"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
@@ -47,3 +47,7 @@ windows-sys = { version = "0.59", features = [
 
 [build-dependencies]
 winresource = "0.1"
+
+# Dependencies build without debug info in dev; this crate keeps full debug info.
+[profile.dev.package."*"]
+debug = false

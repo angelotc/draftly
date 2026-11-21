@@ -1191,6 +1191,38 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
+name = "draftly"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "clap",
+ "eframe",
+ "egui",
+ "flate2",
+ "futures-util",
+ "image",
+ "regex",
+ "reqwest",
+ "rusqlite",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha1 0.10.7",
+ "tokio",
+ "tokio-rustls",
+ "tokio-tungstenite",
+ "toml 0.8.23",
+ "toml_edit 0.22.27",
+ "tracing",
+ "tracing-subscriber",
+ "tray-icon",
+ "urlencoding",
+ "velopack",
+ "windows-sys 0.59.0",
+ "winresource",
+]
+
+[[package]]
 name = "dunce"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2609,38 +2641,6 @@ name = "log"
 version = "0.4.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
-
-[[package]]
-name = "lol-companion"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "clap",
- "eframe",
- "egui",
- "flate2",
- "futures-util",
- "image",
- "regex",
- "reqwest",
- "rusqlite",
- "rustls",
- "serde",
- "serde_json",
- "sha1 0.10.7",
- "tokio",
- "tokio-rustls",
- "tokio-tungstenite",
- "toml 0.8.23",
- "toml_edit 0.22.27",
- "tracing",
- "tracing-subscriber",
- "tray-icon",
- "urlencoding",
- "velopack",
- "windows-sys 0.59.0",
- "winresource",
-]
 
 [[package]]
 name = "lru-slab"

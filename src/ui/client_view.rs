@@ -69,7 +69,7 @@ pub fn render_client(
         .inner_margin(egui::Margin::symmetric(14, 7))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(strong("LOL COMPANION").size(12.5).color(ACCENT));
+                ui.label(strong("DRAFTLY").size(12.5).color(ACCENT));
                 let mut parts = Vec::new();
                 if !s.header.role.is_empty() && !(s.explore && s.picks.is_none()) {
                     parts.push(cap_first(&s.header.role));

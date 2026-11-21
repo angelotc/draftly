@@ -1,8 +1,8 @@
 # On pushes to main (except README-only changes): test, build and publish the "latest" release.
 # Also builds a Velopack installer + update feed, published as release v0.1.<run_number>.
 # Downloads (stable URLs, from the "latest" release):
-#   https://github.com/angelotc/lol-companion/releases/latest/download/LoLCompanion-win-Setup.exe  (installer, auto-updates)
-#   https://github.com/angelotc/lol-companion/releases/latest/download/LoLCompanion.zip           (portable, no auto-update)
+#   https://github.com/angelotc/draftly/releases/latest/download/Draftly-win-Setup.exe  (installer, auto-updates)
+#   https://github.com/angelotc/draftly/releases/latest/download/Draftly.zip           (portable, no auto-update)
 name: release
 
 on:
@@ -33,9 +33,9 @@ jobs:
       - name: Stage package
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path dist/LoLCompanion | Out-Null
-          Copy-Item target/release/lol-companion.exe dist/LoLCompanion/LoLCompanion.exe
-          Copy-Item config.toml dist/LoLCompanion/config.toml
+          New-Item -ItemType Directory -Force -Path dist/Draftly | Out-Null
+          Copy-Item target/release/draftly.exe dist/Draftly/Draftly.exe
+          Copy-Item config.toml dist/Draftly/config.toml
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
@@ -49,11 +49,11 @@ jobs:
         run: |
           # previous full release, used to build delta packages (no-op if none exists yet)
           vpk download github --repoUrl "https://github.com/${{ github.repository }}" --token "$GH_TOKEN" || true
-          vpk pack --packId LoLCompanion --packVersion "$VERSION" --packTitle "LoL Companion" \
-            --packDir dist/LoLCompanion --mainExe LoLCompanion.exe --icon assets/icon.ico
+          vpk pack --packId Draftly --packVersion "$VERSION" --packTitle "Draftly" \
+            --packDir dist/Draftly --mainExe Draftly.exe --icon assets/icon.ico
       - name: Zip
         shell: pwsh
-        run: Compress-Archive -Path dist/LoLCompanion -DestinationPath LoLCompanion.zip
+        run: Compress-Archive -Path dist/Draftly -DestinationPath Draftly.zip
       - name: Publish update feed (Velopack release)
         shell: bash
         env:
@@ -61,7 +61,7 @@ jobs:
           VERSION: 0.1.${{ github.run_number }}
         run: |
           vpk upload github --repoUrl "https://github.com/${{ github.repository }}" --token "$GH_TOKEN" \
-            --publish --releaseName "LoL Companion $VERSION" --tag "v$VERSION" \
+            --publish --releaseName "Draftly $VERSION" --tag "v$VERSION" \
             --targetCommitish "$GITHUB_SHA"
       - name: Publish latest (portable zip + installer)
         shell: bash
@@ -69,6 +69,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete latest --cleanup-tag --yes || true
-          gh release create latest LoLCompanion.zip Releases/LoLCompanion-win-Setup.exe --target "$GITHUB_SHA" --latest \
-            --title "LoL Companion (latest build)" \
-            --notes "Built from ${GITHUB_SHA::7}: $(git log -1 --format=%s). Install with LoLCompanion-win-Setup.exe (auto-updates), or unzip LoLCompanion.zip and run LoLCompanion.exe (portable)."
+          gh release create latest Draftly.zip Releases/Draftly-win-Setup.exe --target "$GITHUB_SHA" --latest \
+            --title "Draftly (latest build)" \
+            --notes "Built from ${GITHUB_SHA::7}: $(git log -1 --format=%s). Install with Draftly-win-Setup.exe (auto-updates), or unzip Draftly.zip and run Draftly.exe (portable)."

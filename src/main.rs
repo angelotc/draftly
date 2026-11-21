@@ -37,12 +37,12 @@ use ui::settings_view::{SettingsUiState, render_settings};
 use ui::theme::apply_theme;
 use updater::Updater;
 
-const PANEL_TITLE: &str = "LoL Companion";
-const GAME_TITLE: &str = "LoL Companion — In game";
-const SETTINGS_TITLE: &str = "LoL Companion — Settings";
+const PANEL_TITLE: &str = "Draftly";
+const GAME_TITLE: &str = "Draftly — In game";
+const SETTINGS_TITLE: &str = "Draftly — Settings";
 
 #[derive(Parser, Debug, Clone)]
-#[command(name = "lol-companion", about = "League of Legends draft & build companion")]
+#[command(name = "draftly", about = "League of Legends draft & build companion")]
 struct Cli {
     #[arg(long)]
     config: Option<PathBuf>,

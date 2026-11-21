@@ -1,13 +1,13 @@
 <div align="center">
 
-<img src="assets/icon.png" width="128" height="128" alt="LoL Companion icon">
+<img src="assets/icon.png" width="128" height="128" alt="Draftly icon">
 
-# LoL Companion
+# Draftly
 
 Draft recommendations and matchup-specific builds for League of Legends on Windows.
 
-[![Download for Windows](https://img.shields.io/badge/Download-Windows-ff8a72?style=for-the-badge&labelColor=211a2e)](https://github.com/angelotc/lol-companion/releases/latest/download/LoLCompanion-win-Setup.exe)&nbsp;&nbsp;
-[![Portable ZIP](https://img.shields.io/badge/Portable-ZIP-c4b5fd?style=for-the-badge&labelColor=211a2e)](https://github.com/angelotc/lol-companion/releases/latest/download/LoLCompanion.zip)&nbsp;&nbsp;
+[![Download for Windows](https://img.shields.io/badge/Download-Windows-ff8a72?style=for-the-badge&labelColor=211a2e)](https://github.com/angelotc/draftly/releases/latest/download/Draftly-win-Setup.exe)&nbsp;&nbsp;
+[![Portable ZIP](https://img.shields.io/badge/Portable-ZIP-c4b5fd?style=for-the-badge&labelColor=211a2e)](https://github.com/angelotc/draftly/releases/latest/download/Draftly.zip)&nbsp;&nbsp;
 [![Read the guide](https://img.shields.io/badge/Read-Guide-c4b5fd?style=for-the-badge&labelColor=211a2e)](#use)
 
 </div>
@@ -25,7 +25,7 @@ Recommendations use:
 ## Install
 
 - Run the **Windows installer** to install for your account without admin rights and get automatic updates.
-- Extract the **portable ZIP** and run `LoLCompanion.exe`. Update portable copies manually.
+- Extract the **portable ZIP** and run `Draftly.exe`. Update portable copies manually.
 
 The app is unsigned. If Windows shows an unrecognized app warning, select **More info → Run anyway**.
 
@@ -150,7 +150,7 @@ your games are weighted 0.5^(age / half_life), half_life = 90 days
 ```mermaid
 flowchart LR
     subgraph Local["User's Computer"]
-        App["LoL Companion"]
+        App["Draftly"]
         LCU["League Client API (LCU, localhost)"]
         Live["Live Client Data API (127.0.0.1:2999)"]
         Cache[("Local Disk Cache")]
@@ -214,6 +214,17 @@ cargo install --path . --force
 To refresh all seven README screenshots on Windows, run `cargo build`, then
 `powershell -File scripts/capture-readme.ps1`. The script seeds a separate preview data
 folder from your existing cache and captures the app without using your live settings.
+
+A weekly scheduled task (`scripts/register-prune-task.ps1`, Sunday 03:00) runs
+`scripts/prune-target.ps1`, which keeps `target/` small:
+
+- It keeps only the newest incremental session per crate and deletes crate caches unused for 14 days (`-StaleDays`).
+- It runs `cargo clean` when `target/` is still over 6 GB (`-MaxGB`).
+- It skips the run while `cargo`, `rustc`, or a `target/` build of the app is running.
+- It logs each run to `%LOCALAPPDATA%\league-analysis\prune-target.log`.
+
+Run `powershell -File scripts/prune-target.ps1 -WhatIf` to preview a prune, or
+`powershell -File scripts/register-prune-task.ps1 -Unregister` to remove the task.
 
 A push that changes only `README.md` skips the release build. Other pushes to `main` run
 `cargo test`, build the release binary, and publish version `0.1.<run>` with the Velopack

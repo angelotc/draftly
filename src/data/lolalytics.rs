@@ -439,7 +439,7 @@ mod tests {
         static NEXT_CACHE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let instance = NEXT_CACHE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!(
-            "lol-companion-lolalytics-{}-{instance}",
+            "draftly-lolalytics-{}-{instance}",
             std::process::id(),
         ));
         let lola = Lolalytics::with_cache_dir(tier, 14, dir.clone());

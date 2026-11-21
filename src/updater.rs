@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use tracing::{info, warn};
 use velopack::{UpdateCheck, UpdateInfo, UpdateManager, VelopackApp, VelopackAsset, sources};
 
-pub const REPO_URL: &str = "https://github.com/angelotc/lol-companion";
+pub const REPO_URL: &str = "https://github.com/angelotc/draftly";
 
 pub fn startup() {
     VelopackApp::build().run();

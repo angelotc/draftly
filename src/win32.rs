@@ -32,10 +32,10 @@ mod imp {
     pub const MIN_PAGE_WIDTH: i32 = 640;
     pub const PAGE_SIZE: (i32, i32) = (1280, 720);
 
-    const INSTANCE_MUTEX: &str = "Local\\LoLCompanion";
-    const SHOW_EVENT: &str = "Local\\LoLCompanion.Show";
+    const INSTANCE_MUTEX: &str = "Local\\Draftly";
+    const SHOW_EVENT: &str = "Local\\Draftly.Show";
     const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
-    const RUN_VALUE: &str = "LoLCompanion";
+    const RUN_VALUE: &str = "Draftly";
 
     fn wide(s: &str) -> Vec<u16> {
         OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()

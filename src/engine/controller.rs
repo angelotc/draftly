@@ -1293,7 +1293,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_controller_records_draft() {
-        let dir = std::env::temp_dir().join("lol_companion_test_ctl");
+        let dir = std::env::temp_dir().join("draftly_test_ctl");
         let _ = std::fs::remove_dir_all(&dir);
         let store = Arc::new(Store::open(dir.join("s.sqlite")).unwrap());
         let (ctl, mut rx) = Controller::new(Config::default(), Some(store));

@@ -9,7 +9,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 if (-not $Binary) {
-    $Binary = Join-Path $repo 'target\debug\lol-companion.exe'
+    $Binary = Join-Path $repo 'target\debug\draftly.exe'
 }
 $Binary = (Resolve-Path -LiteralPath $Binary).Path
 $config = Join-Path $repo 'config.toml'

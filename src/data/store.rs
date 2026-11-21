@@ -297,7 +297,7 @@ mod tests {
 
     #[test]
     fn test_store_draft_and_games() {
-        let dir = std::env::temp_dir().join("lol_companion_test_store");
+        let dir = std::env::temp_dir().join("draftly_test_store");
         let _ = fs::remove_dir_all(&dir);
         let store = Store::open(dir.join("s.sqlite")).unwrap();
         let did = store.start_draft(Some("support"), "master_plus").unwrap();
