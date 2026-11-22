@@ -216,7 +216,15 @@ fn render_player_row(ui: &mut Ui, p: &PlayerView, ally: bool, height: f32, imgs:
     let dot_count = p.recent.chars().count();
     let dot_step = 6.0_f32.min((right - left).max(1.0) * 0.35 / dot_count.max(1) as f32);
     let stats_w = (right - left) - dot_count as f32 * dot_step - 4.0;
-    let stats = line(recent.clone(), 10.0, MUTED, stats_w, false);
+    let champion_record = match (p.champ_season_games, p.champ_season_wr) {
+        (Some(games), Some(wr)) => format!("Solo Q · {wr}% WR ({games} games)"),
+        (Some(0), _) => "Solo Q · 0 games on champ".into(),
+        _ => match p.champ_wr {
+            Some(wr) => format!("Recent · {wr}% WR ({} games)", p.champ_games),
+            None => "Champion WR unavailable".into(),
+        },
+    };
+    let stats = line(champion_record, 10.0, MUTED, stats_w, false);
     painter.galley(egui::pos2(left, stats_y - stats.size().y * 0.5), stats, MUTED);
     for (i, ch) in p.recent.chars().rev().enumerate() {
         painter.circle_filled(
@@ -260,7 +268,7 @@ fn render_player_row(ui: &mut Ui, p: &PlayerView, ally: bool, height: f32, imgs:
         tip.push_str(&format!("\nRanked season: {text}"));
     }
     if let Some(games) = p.champ_season_games {
-        tip.push_str(&format!("\nChampion season: {games} games"));
+        tip.push_str(&format!("\nChampion Solo Queue season: {games} games"));
         if games > 0 && let Some(wr) = p.champ_season_wr {
             tip.push_str(&format!(" · {wr}% WR"));
         }

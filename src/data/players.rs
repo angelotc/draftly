@@ -1,4 +1,5 @@
 use serde_json::Value;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -43,6 +44,7 @@ pub struct FixtureClient {
     ranked: Value,
     history: Value,
     mastery: Value,
+    champion_season: HashMap<String, HashMap<i32, [u32; 2]>>,
 }
 
 impl FixtureClient {
@@ -57,6 +59,8 @@ impl FixtureClient {
             ranked: read("ranked.json")?,
             history: read("history.json")?,
             mastery: read("mastery.json")?,
+            champion_season: serde_json::from_value(read("champion-season.json")?)
+                .map_err(|e| e.to_string())?,
         })
     }
 
@@ -207,13 +211,24 @@ pub async fn load_one(
         }
     }
 
-    if let Some(op) = opgg
-        && r.champion_id != 0
-        && let Some(season) = op.season(&r.name, &r.tag, reg).await
-    {
-        let pair = season.get(&r.champion_id).copied().unwrap_or([0, 0]);
-        s.season_games = Some(pair[0]);
-        s.season_wins = Some(pair[1]);
+    if r.champion_id != 0 {
+        let record = match client {
+            PlayerClient::Fixture(fixture) => fixture
+                .champion_season
+                .get(&r.puuid)
+                .map(|season| season.get(&r.champion_id).copied().unwrap_or([0, 0])),
+            PlayerClient::Live(_) => match opgg {
+                Some(op) => op
+                    .season(&r.name, &r.tag, reg)
+                    .await
+                    .map(|season| season.get(&r.champion_id).copied().unwrap_or([0, 0])),
+                None => None,
+            },
+        };
+        if let Some([games, wins]) = record {
+            s.season_games = Some(games);
+            s.season_wins = Some(wins);
+        }
     }
 
     s.tags = compute_tags(&s);
@@ -258,6 +273,16 @@ mod tests {
         let (gid, refs) = game_refs(&client, None, |_| None).await.unwrap();
         assert!(gid != 0 || !refs.is_empty());
         let stats = load_all(client, refs, None, "".into()).await;
-        assert!(!stats.is_empty());
+        assert_eq!(stats.len(), 10);
+        let record = |puuid: &str| {
+            let player = stats
+                .iter()
+                .find(|s| s.r.as_ref().is_some_and(|r| r.puuid == puuid))
+                .unwrap();
+            player.season_games.zip(player.season_wins)
+        };
+        assert_eq!(record("p10"), Some((81, 45)));
+        assert_eq!(record("p22"), Some((0, 0)));
+        assert_eq!(record("p24"), None);
     }
 }

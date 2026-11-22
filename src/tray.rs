@@ -132,7 +132,7 @@ impl AppTray {
 
         let tray = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
-            .with_tooltip("LoL Companion")
+            .with_tooltip("Draftly")
             .with_icon(icon)
             .build()
             .map_err(|e| e.to_string())?;
@@ -160,8 +160,8 @@ impl AppTray {
             item.set_text(lbl);
             item.set_enabled(en);
             let tip = match st {
-                UpdateState::Ready(ver) => format!("LoL Companion — Update {ver} ready (restart to apply)"),
-                _ => "LoL Companion".to_string(),
+                UpdateState::Ready(ver) => format!("Draftly — Update {ver} ready (restart to apply)"),
+                _ => "Draftly".to_string(),
             };
             let _ = self.tray.set_tooltip(Some(tip));
         }
@@ -194,16 +194,17 @@ pub fn spawn_tray(initial_update: UpdateState) -> Option<(TrayHandle, TrayIds)> 
             };
             let mut msg: MSG = std::mem::zeroed();
             while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
-                if msg.message == WM_APP {
-                    while let Ok(cmd) = rx.try_recv() {
-                        match cmd {
-                            TrayCmd::SetAutostart(on) => app_tray.set_autostart_checked(on),
-                            TrayCmd::SetUpdateState(st) => app_tray.set_update_state(&st),
-                        }
-                    }
-                } else {
+                if !msg.hwnd.is_null() || msg.message != WM_APP {
                     TranslateMessage(&msg);
                     DispatchMessageW(&msg);
+                }
+                // The popup menu runs a nested message loop that can consume our wake.
+                // Process queued changes when dispatch returns, even if that wake was lost.
+                while let Ok(cmd) = rx.try_recv() {
+                    match cmd {
+                        TrayCmd::SetAutostart(on) => app_tray.set_autostart_checked(on),
+                        TrayCmd::SetUpdateState(st) => app_tray.set_update_state(&st),
+                    }
                 }
             }
         }

@@ -216,6 +216,26 @@ pub fn default_build_weights(role: &str) -> HashMap<String, f64> {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
+pub struct StreamConfig {
+    pub enabled: bool,
+    pub endpoint: String,
+    pub api_key: String,
+    pub auto_copy_link: bool,
+}
+
+impl Default for StreamConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint: String::new(),
+            api_key: String::new(),
+            auto_copy_link: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct Config {
     pub min_pick_rate: f64,
     pub tier: String,
@@ -240,6 +260,7 @@ pub struct Config {
     pub record_games: bool,
     pub record_every: f64,
     pub opgg: bool,
+    pub stream: StreamConfig,
 }
 
 impl Default for Config {
@@ -268,6 +289,7 @@ impl Default for Config {
             record_games: false,
             record_every: 15.0,
             opgg: true,
+            stream: StreamConfig::default(),
         }
     }
 }
@@ -453,7 +475,7 @@ mod tests {
         fn new() -> Self {
             static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
             let root = std::env::temp_dir().join(format!(
-                "lol_companion_config_paths_{}_{}",
+                "draftly_config_paths_{}_{}",
                 std::process::id(),
                 NEXT_ID.fetch_add(1, Ordering::Relaxed)
             ));
@@ -605,7 +627,7 @@ mod tests {
 
     #[test]
     fn test_settings_save_preserves_comments() {
-        let dir = std::env::temp_dir().join("lol_companion_test_cfg");
+        let dir = std::env::temp_dir().join("draftly_test_cfg");
         let _ = fs::create_dir_all(&dir);
         let path = dir.join("config.toml");
         fs::write(&path, "# keep this comment\nmin_pick_rate = 1.0\nlockfile = 'C:\\old'\n").unwrap();

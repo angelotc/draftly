@@ -37,12 +37,12 @@ use ui::settings_view::{SettingsUiState, render_settings};
 use ui::theme::apply_theme;
 use updater::Updater;
 
-const PANEL_TITLE: &str = "LoL Companion";
-const GAME_TITLE: &str = "LoL Companion — In game";
-const SETTINGS_TITLE: &str = "LoL Companion — Settings";
+const PANEL_TITLE: &str = "Draftly";
+const GAME_TITLE: &str = "Draftly — In game";
+const SETTINGS_TITLE: &str = "Draftly — Settings";
 
 #[derive(Parser, Debug, Clone)]
-#[command(name = "lol-companion", about = "League of Legends draft & build companion")]
+#[command(name = "draftly", about = "League of Legends draft & build companion")]
 struct Cli {
     #[arg(long)]
     config: Option<PathBuf>,
@@ -247,6 +247,16 @@ impl eframe::App for CompanionApp {
             self.initialized = true;
             *self.shared.egui_ctx.lock().unwrap() = Some(ctx.clone());
             self.shared.imgs.lock().unwrap().bind_ctx(ctx);
+            let mut hwnd = self.shared.panel_hwnd.load(Ordering::Relaxed);
+            if hwnd == 0 {
+                hwnd = win32::find_window_by_title(PANEL_TITLE);
+                if hwnd != 0 {
+                    self.shared.panel_hwnd.store(hwnd, Ordering::Relaxed);
+                }
+            }
+            if hwnd != 0 {
+                win32::lock_aspect(hwnd);
+            }
             let shared_c = Arc::clone(&self.shared);
             self.shared.ctl.set_repaint_hook(move || {
                 if shared_c.panel_shown.load(Ordering::Relaxed) {
@@ -494,7 +504,6 @@ fn spawn_tracker_and_tray(
                 let hwnd = win32::find_window_by_title(PANEL_TITLE);
                 if hwnd != 0 {
                     shared.panel_hwnd.store(hwnd, Ordering::Relaxed);
-                    win32::lock_aspect(hwnd);
                     if let Some(saved) = load_ui_settings().window_rect {
                         let r = win32::Rect {
                             left: saved[0],
@@ -502,7 +511,7 @@ fn spawn_tracker_and_tray(
                             right: saved[2],
                             bottom: saved[3],
                         };
-                        if win32::on_screen(r) {
+                        if win32::is_valid_panel_rect(r) {
                             win32::set_rect(hwnd, r);
                             last_panel_rect = Some(r);
                         }
@@ -590,9 +599,10 @@ fn spawn_tracker_and_tray(
             }
 
             let ph = shared.panel_hwnd.load(Ordering::Relaxed);
-            if shared.panel_shown.load(Ordering::Relaxed) && ph != 0 && win32::is_normal(ph) {
+            let ui_ready = shared.egui_ctx.lock().unwrap().is_some();
+            if ui_ready && shared.panel_shown.load(Ordering::Relaxed) && ph != 0 && win32::is_normal(ph) {
                 let r = win32::window_rect(ph);
-                if last_panel_rect != Some(r) {
+                if win32::is_valid_panel_rect(r) && last_panel_rect != Some(r) {
                     last_panel_rect = Some(r);
                     save_ui_settings(|s| s.window_rect = Some([r.left, r.top, r.right, r.bottom]));
                 }
@@ -712,10 +722,13 @@ async fn run_simulate(ctl: Arc<Controller>, cli: Cli) {
     let role = cli.role.clone().unwrap_or_else(|| "support".into());
     let allies: Vec<Slot> = parse_ids(&cli.allies)
         .into_iter()
-        .map(|c| Slot {
+        .enumerate()
+        .map(|(idx, c)| Slot {
+            cell_id: idx as i32,
             champion_id: c,
             position: String::new(),
             tentative: false,
+            locked: true,
             is_me: false,
         })
         .collect();
@@ -918,12 +931,11 @@ fn main() {
     });
 
     let work = win32::primary_work_area();
-    let w = (win32::PAGE_SIZE.0 as f32).min(work.width() as f32 * 0.9);
-    let h = w / (16.0 / 9.0);
+    let (w, h) = win32::default_panel_size_for(work, win32::primary_dpi_scale());
     let mut viewport = ViewportBuilder::default()
         .with_title(PANEL_TITLE)
         .with_inner_size([w, h])
-        .with_min_inner_size([640.0, 360.0])
+        .with_min_inner_size([win32::MIN_PAGE_WIDTH as f32, win32::MIN_PAGE_HEIGHT as f32])
         .with_visible(always_show);
     if let Ok(dyn_img) = image::load_from_memory(include_bytes!("../assets/icon.png")) {
         let rgba = dyn_img.to_rgba8();

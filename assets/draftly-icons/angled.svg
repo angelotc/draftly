@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 256 256">
+  <title>Draftly — Angled D</title>
+  <rect x="6" y="6" width="244" height="244" rx="54" fill="#211a2e"/>
+  <path fill="#c4b5fd" fill-rule="evenodd" d="M59 54H128L194 92V164L128 202H59Z M86 81V175H121L167 149V107L121 81Z"/>
+  <polygon fill="#ff8a72" points="200,107 221,128 200,149 179,128"/>
+</svg>
