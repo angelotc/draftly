@@ -344,6 +344,10 @@ impl eframe::App for CompanionApp {
                         &mut imgs,
                         &mut open_settings,
                     );
+                } else if let ScreenUpdate::Game(g) = &self.cached_screen {
+                    ui.label("For the in-game overlay, set League’s Video → Window Mode to Borderless.");
+                    let mut imgs = self.shared.imgs.lock().unwrap();
+                    render_game_overlay(ui, g, &mut imgs, "Hover for details");
                 } else {
                     ui.centered_and_justified(|ui| {
                         ui.label(format!(
@@ -415,7 +419,8 @@ impl eframe::App for CompanionApp {
                 let mut imgs = shared_ig.imgs.lock().unwrap();
                 imgs.poll(ctx);
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    render_game_overlay(ui, &g, &mut imgs);
+                    let footer = format!("{} to hide · Hover for details", domain::hotkey::current());
+                    render_game_overlay(ui, &g, &mut imgs, &footer);
                 });
                 if !shared_ig.screenshot_settings {
                     check_screenshot(ctx, &shared_ig, g.build.is_some() || g.build_note != "Loading build...");
