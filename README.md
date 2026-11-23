@@ -94,6 +94,10 @@ In borderless or windowed mode, an overlay sits along the right edge of the game
 focus. See your gold and remaining item options, with each item's win rate and Δ by enemy lane.
 Alongside the build, see all 10 players' ranks, season records, champion stats, and recent results.
 
+For a full-screen overlay, open League's **Video** settings and set **Window Mode** to
+**Borderless**. In exclusive fullscreen, Alt+Tab to the Draftly panel, or open it from the
+system tray, to see the live build and roster.
+
 Enemies who are ahead in levels and items count for more when the build is weighted, and are marked
 **Fed**; ones who are behind count for less and are marked **Behind**. An enemy who is far ahead
 is weighted even outside your usual lanes. Turn this off with `threat_scaling = false`.

@@ -20,7 +20,7 @@ fn fmt_k(n: i32) -> String {
     }
 }
 
-pub fn render_game_overlay(ui: &mut Ui, g: &GameScreen, imgs: &mut ImageCache) {
+pub fn render_game_overlay(ui: &mut Ui, g: &GameScreen, imgs: &mut ImageCache, footer_text: &str) {
     egui::Frame::new()
         .fill(BG)
         .stroke(Stroke::new(1.0, LINE2))
@@ -74,7 +74,7 @@ pub fn render_game_overlay(ui: &mut Ui, g: &GameScreen, imgs: &mut ImageCache) {
             ui.painter().text(
                 footer.center() + Vec2::new(0.0, 1.0),
                 egui::Align2::CENTER_CENTER,
-                &format!("{} to hide · Hover for details", crate::domain::hotkey::current()),
+                footer_text,
                 egui::FontId::proportional(9.5),
                 MUTED,
             );
