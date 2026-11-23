@@ -20,7 +20,7 @@ Recommendations use:
 - **Your current draft** for picks and bans that fit your team and account for the opponents you know.
 - **Your champion masteries and recent match history** to factor your experience into pick rankings.
 
-![Champ select, best picks: your best picks top to bottom, every matchup and synergy beside them](docs/views/picks.png)
+![Champ select with Details on: your best picks top to bottom, every matchup and synergy beside them](docs/views/details.png)
 
 ## Install
 
@@ -37,8 +37,7 @@ brings it back.
 
 | Shortcut | Action |
 |---|---|
-| **Ctrl+X** | Toggle the panel while it or the League client has focus, or toggle the overlay in game. |
-| **Ctrl+Shift+L** | Toggle the panel from any window. |
+| **Ctrl+Shift+L** | Show or hide the panel from any window, or the overlay in game. Change it in Settings. The keystroke is not swallowed, so it still reaches the focused app. |
 
 Use the tray icon to show or hide the panel, check for updates, open settings, enable Start with Windows, or quit.
 
@@ -46,7 +45,8 @@ Use the tray icon to show or hide the panel, check for updates, open settings, e
 
 The header shows both teams and the draft win estimate. The app switches views as the draft advances.
 You can open another available view at any time. Hover a score for its sample size, or click an enemy
-champion to correct a guessed lane. The step row shows bans and the enemy team's damage split.
+champion to correct a guessed lane. The step row marks the current step with a dot and shows bans and
+the enemy team's damage split.
 
 #### Ban phase
 
@@ -55,19 +55,28 @@ champion to correct a guessed lane. The step row shows bans and the enemy team's
 Bans rank by how often you might face a champion and how much it threatens your likely picks and
 your teammates' hovers. The detail panel explains the top ban.
 
-#### Blind pick
+#### Picks
 
-<img src="docs/views/blind.png" alt="Blind pick: blind-safe picks with strength, team fit and counter risk">
+<img src="docs/views/picks.png" alt="Picks: your top five picks, each with a score and one short reason">
 
-While your lane opponent is unknown, picks rank by strength, team fit, and counter risk. Each row
-compares the average matchup with the worst matchups that make up 15% of opponent picks. Tune the
-ranking under `[blind]` in `config.toml`.
+One Picks view covers the whole pick phase. It shows your top five picks, each with a score and the
+single biggest reason behind it. Change how many are listed with **Picks shown** in Settings. Click a
+pick to open its detail panel with the underlying win-rate changes, and click it again to close it.
+The rankings freeze when you lock in.
 
-#### Best picks
+<img src="docs/views/blind.png" alt="Picks while your lane opponent is unknown: the blind-safe ranking with each pick's hardest matchup">
 
-Once your lane opponent is known, picks rank by strength, matchups, synergies, and your experience.
-Each row adds up to its score. Click a pick to see the underlying win-rate changes. The rankings
-freeze when you lock in.
+While your lane opponent is unknown, the view opens on **Blind-safe**, which ranks picks by strength,
+team fit, and counter risk and names each pick's hardest matchup. Switch to **Best matchup** to see the
+ranking against the enemies picked so far. Once your lane opponent is picked, only the matchup ranking
+remains. Tune the blind ranking under `[blind]` in `config.toml`.
+
+<img src="docs/views/details.png" alt="Picks with Details on: every matchup and synergy beside each pick">
+
+Turn on **Details** for the full breakdown: strength, every matchup and synergy, and your own
+experience, with each row adding up to its score. In the blind-safe ranking, Details compares the
+average matchup with the worst matchups that make up 15% of opponent picks. The app remembers the
+toggle.
 
 #### Build
 
@@ -84,6 +93,10 @@ an option for details. Hover **+N more** to see additional items for a slot.
 In borderless or windowed mode, an overlay sits along the right edge of the game without taking
 focus. See your gold and remaining item options, with each item's win rate and Δ by enemy lane.
 Alongside the build, see all 10 players' ranks, season records, champion stats, and recent results.
+
+Enemies who are ahead in levels and items count for more when the build is weighted, and are marked
+**Fed**; ones who are behind count for less and are marked **Behind**. An enemy who is far ahead
+is weighted even outside your usual lanes. Turn this off with `threat_scaling = false`.
 
 ### Between games
 
@@ -102,8 +115,11 @@ app stores settings and advanced options in `%LOCALAPPDATA%\league-analysis\conf
 
 | Key | Default | Purpose |
 |---|---|---|
+| `picks_shown` | 5 | How many picks each ranking lists (1 to 15). |
+| `[hotkeys]` | | `toggle`: the show or hide shortcut, such as `ctrl+shift+l`. Use Ctrl, Shift or Alt with a letter or digit, or an F-key alone. |
 | `min_pick_rate` | 1.0 | Minimum candidate pick rate (%). Lower it for off-meta picks. |
 | `comfort_only` | false | Only recommend champions you've played. |
+| `threat_scaling` | true | In game, weight enemies who are ahead more in the build and ones who are behind less. |
 | `[comfort]` | | `weight` (0 = off), `k`, `history`, `half_life`, `min_games`, `mastery`, `mastery_cap` |
 | `[weights.<role>]` | | Per-role lane weights. |
 | `[build_weights.<role>]` | | Which enemies build Δs are measured against, and their weights. |
@@ -211,7 +227,7 @@ cargo build --release
 cargo install --path . --force
 ```
 
-To refresh all seven README screenshots on Windows, run `cargo build`, then
+To refresh all eight README screenshots on Windows, run `cargo build`, then
 `powershell -File scripts/capture-readme.ps1`. The script seeds a separate preview data
 folder from your existing cache and captures the app without using your live settings.
 

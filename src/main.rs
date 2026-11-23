@@ -24,7 +24,7 @@ use crate::data::players::{FixtureClient, PlayerClient, game_refs, load_all};
 use crate::data::store::Store;
 use crate::domain::config::{Config, data_dir, default_config_path, load_config, load_ui_settings, save_ui_settings};
 use crate::domain::lcu::Slot;
-use crate::domain::live::LiveGame;
+use crate::domain::live::{LiveGame, LivePlayer};
 use crate::domain::scoring::LANES;
 use crate::engine::controller::{Controller, ScreenUpdate};
 use crate::engine::views::GameScreen;
@@ -72,6 +72,9 @@ struct Cli {
     level: i32,
     #[arg(long, default_value_t = 650.0)]
     gold: f64,
+    /// Simulate this enemy as far ahead (higher level, more items) to preview the Fed tag.
+    #[arg(long)]
+    fed: Option<String>,
     #[arg(long)]
     screenshot: Option<PathBuf>,
     /// Capture the Settings window instead of the main panel.
@@ -340,7 +343,10 @@ impl eframe::App for CompanionApp {
                     );
                 } else {
                     ui.centered_and_justified(|ui| {
-                        ui.label("In game — press Ctrl+X over League to toggle the overlay.");
+                        ui.label(format!(
+                            "In game — press {} over League to toggle the overlay.",
+                            domain::hotkey::current()
+                        ));
                     });
                 }
             });
@@ -418,8 +424,8 @@ impl eframe::App for CompanionApp {
         if settings_open {
             let builder = ViewportBuilder::default()
                 .with_title(SETTINGS_TITLE)
-                .with_inner_size([480.0, 440.0])
-                .with_min_inner_size([420.0, 340.0]);
+                .with_inner_size([480.0, 520.0])
+                .with_min_inner_size([420.0, 420.0]);
             let shared_st = Arc::clone(&self.shared);
             ctx.show_viewport_deferred(ViewportId::from_hash_of("settings_win"), builder, move |ctx, _| {
                 prepare_screenshot(ctx, &shared_st);
@@ -611,13 +617,13 @@ fn spawn_tracker_and_tray(
     });
 }
 
-fn spawn_ctrl_x_listener(shared: Arc<SharedUi>, sig_tx: mpsc::UnboundedSender<AppSignal>) {
+fn spawn_hotkey_listener(shared: Arc<SharedUi>, sig_tx: mpsc::UnboundedSender<AppSignal>) {
     std::thread::spawn(move || {
         let mut was = false;
         loop {
             std::thread::sleep(Duration::from_millis(33));
-            // Check Ctrl+X keys FIRST; 0 Win32 window calls when idle!
-            let now = win32::ctrl_x_down();
+            // Check the combo keys FIRST; 0 Win32 window calls when idle!
+            let now = win32::combo_down(&domain::hotkey::current());
             if !now {
                 was = false;
                 continue;
@@ -626,19 +632,13 @@ fn spawn_ctrl_x_listener(shared: Arc<SharedUi>, sig_tx: mpsc::UnboundedSender<Ap
                 continue;
             }
             was = true;
-            let game = win32::find_game();
-            let front = win32::foreground_root();
-            let client = win32::find_client();
-            let panel = win32::find_window_by_title(PANEL_TITLE);
-            let game_panel = win32::find_window_by_title(GAME_TITLE);
-            if front != 0 && (front == game || front == client || front == panel || front == game_panel) {
-                if game != 0 {
-                    let _ = sig_tx.send(AppSignal::ToggleIngame);
-                    shared.wake_root();
-                } else {
-                    shared.ensure_panel_visible();
-                    let _ = sig_tx.send(AppSignal::TogglePanel);
-                }
+            // Works from any foreground window: the game overlay if a game is running, else the panel.
+            if win32::find_game() != 0 {
+                let _ = sig_tx.send(AppSignal::ToggleIngame);
+                shared.wake_root();
+            } else {
+                shared.ensure_panel_visible();
+                let _ = sig_tx.send(AppSignal::TogglePanel);
             }
         }
     });
@@ -750,6 +750,30 @@ async fn run_simulate(ctl: Arc<Controller>, cli: Cli) {
         for (lane, cid) in LANES.iter().rev().zip(enemies.iter()) {
             enemy_map.insert((*lane).to_string(), rec.champs.name(*cid));
         }
+        let fed_id = cli.fed.as_deref().and_then(|n| rec.champs.id_from_slug(n));
+        let mut players = vec![LivePlayer {
+            enemy: false,
+            lane: role.clone(),
+            champion: cli.champion.clone(),
+            level: cli.level,
+            items: cli.items.clone(),
+            ..Default::default()
+        }];
+        for (lane, cid) in LANES.iter().rev().zip(enemies.iter()) {
+            let fed = fed_id == Some(*cid);
+            players.push(LivePlayer {
+                enemy: true,
+                lane: (*lane).to_string(),
+                champion: rec.champs.name(*cid),
+                level: if fed { 13 } else { 9 },
+                items: if fed {
+                    vec![3089, 3157, 3135, 3020]
+                } else {
+                    vec![3071, 3053]
+                },
+                ..Default::default()
+            });
+        }
         let lg = LiveGame {
             champion: cli.champion.clone(),
             role: role.clone(),
@@ -759,6 +783,7 @@ async fn run_simulate(ctl: Arc<Controller>, cli: Cli) {
             game_time: cli.level as f64 * 120.0,
             allies: Default::default(),
             enemies: enemy_map,
+            players,
         };
         ctl.set_simulate_data(None, Some(lg), true);
     }
@@ -821,6 +846,7 @@ fn main() {
         None
     };
 
+    domain::hotkey::set_current(cfg.hotkey());
     let (ctl, screen_rx) = Controller::new(cfg, store);
     let (sig_tx, sig_rx) = mpsc::unbounded_channel();
 
@@ -845,7 +871,7 @@ fn main() {
         None
     };
 
-    let mut settings_ui = SettingsUiState::new(cfg_path, ver_lbl);
+    let mut settings_ui = SettingsUiState::new(cfg_path, ver_lbl, Arc::clone(&tray_slot));
     settings_ui.open = cli.screenshot_settings;
     let shared = Arc::new(SharedUi {
         ctl: Arc::clone(&ctl),
@@ -878,13 +904,7 @@ fn main() {
         });
     }
 
-    let tx_hotkey = sig_tx.clone();
-    let sh_hk = Arc::clone(&shared);
-    win32::register_toggle_hotkey(move || {
-        sh_hk.ensure_panel_visible();
-        let _ = tx_hotkey.send(AppSignal::TogglePanel);
-    });
-    spawn_ctrl_x_listener(Arc::clone(&shared), sig_tx.clone());
+    spawn_hotkey_listener(Arc::clone(&shared), sig_tx.clone());
 
     spawn_tracker_and_tray(Arc::clone(&shared), tray_ids, sig_tx);
 

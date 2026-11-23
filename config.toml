@@ -13,7 +13,10 @@ region = "all"
 k = 500
 # Multiplier applied to synergy with allies that are only hovering
 tentative_factor = 0.5
+# Internal candidate cap (ban suggestions are derived from it); raise picks_shown instead.
 top_n = 8
+# Picks listed per tab in champ select
+picks_shown = 5
 # In-game panel size. It already grows with the game's resolution; raise this to make it bigger.
 ingame_scale = 1.0
 lockfile = 'C:\Riot Games\League of Legends\lockfile'
@@ -52,9 +55,16 @@ lockfile = 'C:\Riot Games\League of Legends\lockfile'
 # tail = 0.15    # they pick from the worst 15% of your matchups (weighted by pick rate)
 # weight = 1.0   # how much the counter risk counts against champion strength
 comfort_only = false
+# Weight enemies who are ahead more (and ones behind less) in the in-game build
+threat_scaling = true
 
 [stream]
 enabled = false
 endpoint = ""
 api_key = ""
 auto_copy_link = false
+
+# Show/hide shortcut: ctrl/shift/alt + A-Z, 0-9 or F1-F12 (F-keys may be used alone).
+# Works from any window; the keystroke is not swallowed.
+[hotkeys]
+toggle = "ctrl+shift+l"

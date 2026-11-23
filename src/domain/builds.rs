@@ -289,6 +289,20 @@ pub fn add_matchup(
     }
 }
 
+/// Multiply every matchup weight by the enemy's threat multiplier (key = enemy champion id).
+/// Missing key = 1.0.
+pub fn scale_threat(build: &mut Build, mult: &HashMap<i32, f64>) {
+    let scale = |o: &mut BuildOption| {
+        for v in &mut o.vs {
+            v.weighted *= mult.get(&v.enemy).copied().unwrap_or(1.0);
+        }
+    };
+    for opts in build.sections.values_mut() {
+        opts.iter_mut().for_each(scale);
+    }
+    build.runes.values_mut().for_each(scale);
+}
+
 pub fn best_vs(options: &[BuildOption], min_edge: f64) -> Option<&BuildOption> {
     options
         .iter()
@@ -335,6 +349,49 @@ mod tests {
         assert!((boots[1].vs[0].delta - 3.0).abs() < 1e-9);
         assert!((boots[1].matchup() - 3.0 * 1500.0 / 1800.0).abs() < 1e-9);
         assert_eq!(best_vs(boots, 0.3).unwrap().key, "3111");
+    }
+
+    #[test]
+    fn test_scale_threat_rescales_and_flips_best_vs() {
+        let vd = |enemy: i32, weighted: f64| VsDelta {
+            enemy,
+            lane: "x".into(),
+            delta: weighted,
+            games: 100,
+            weighted,
+        };
+        let opt = |key: &str, vs: Vec<VsDelta>| BuildOption {
+            key: key.into(),
+            wr: 50.0,
+            pr: 10.0,
+            games: 1000,
+            vs,
+        };
+        let mut b = Build {
+            champion_id: 1,
+            lane: "top".into(),
+            wr: 50.0,
+            games: 1000,
+            pages: HashMap::new(),
+            runes: HashMap::new(),
+            sections: HashMap::new(),
+            vs: vec![],
+        };
+        // A = 1.1 + 0.2 = 1.3, B = 0.2 + 1.0 = 1.2: A leads until enemy 20 is weighted 2x.
+        b.sections.insert(
+            "boots".into(),
+            vec![opt("A", vec![vd(10, 1.1), vd(20, 0.2)]), opt("B", vec![vd(10, 0.2), vd(20, 1.0)])],
+        );
+        b.runes.insert("r".into(), opt("R", vec![vd(10, 2.0)]));
+        assert_eq!(best_vs(&b.sections["boots"], 0.3).unwrap().key, "A");
+        let mult: HashMap<i32, f64> = [(20, 2.0)].into_iter().collect();
+        scale_threat(&mut b, &mult);
+        let boots = &b.sections["boots"];
+        assert!((boots[0].vs[0].weighted - 1.1).abs() < 1e-9);
+        assert!((boots[0].vs[1].weighted - 0.4).abs() < 1e-9);
+        assert!((boots[1].vs[1].weighted - 2.0).abs() < 1e-9);
+        assert!((b.runes["r"].vs[0].weighted - 2.0).abs() < 1e-9);
+        assert_eq!(best_vs(boots, 0.3).unwrap().key, "B");
     }
 
     #[test]

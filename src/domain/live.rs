@@ -12,6 +12,19 @@ pub fn live_position(pos: &str) -> &'static str {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct LivePlayer {
+    pub enemy: bool,
+    pub lane: String,
+    pub champion: String,
+    pub level: i32,
+    pub kills: i32,
+    pub deaths: i32,
+    pub assists: i32,
+    pub cs: i32,
+    pub items: Vec<i32>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct LiveGame {
     pub champion: String,
@@ -22,6 +35,7 @@ pub struct LiveGame {
     pub game_time: f64,
     pub allies: HashMap<String, String>,
     pub enemies: HashMap<String, String>,
+    pub players: Vec<LivePlayer>,
 }
 
 impl LiveGame {
@@ -35,6 +49,16 @@ impl LiveGame {
             && self.allies == other.allies
             && self.enemies == other.enemies
             && (self.gold as i64) == (other.gold as i64)
+            && self.enemy_state() == other.enemy_state()
+    }
+
+    /// (lane, level, items) for each enemy player; what can change the threat multipliers.
+    fn enemy_state(&self) -> Vec<(&str, i32, &[i32])> {
+        self.players
+            .iter()
+            .filter(|p| p.enemy)
+            .map(|p| (p.lane.as_str(), p.level, p.items.as_slice()))
+            .collect()
     }
 }
 
@@ -55,20 +79,43 @@ pub fn parse_live(data: &Value) -> Option<LiveGame> {
     let mut allies = HashMap::new();
     let mut enemies = HashMap::new();
 
+    let mut live_players = Vec::new();
+
     for p in players {
-        if std::ptr::eq(p, me) {
-            continue;
-        }
+        let is_me = std::ptr::eq(p, me);
         let lane = live_position(p.get("position").and_then(|v| v.as_str()).unwrap_or(""));
-        if lane.is_empty() {
-            continue;
-        }
         let cname = p
             .get("championName")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        if p.get("team").and_then(|v| v.as_str()) == team {
+        let is_ally = p.get("team").and_then(|v| v.as_str()) == team;
+        let int = |v: Option<&Value>| v.and_then(|x| x.as_i64()).unwrap_or(0) as i32;
+        let scores = p.get("scores");
+        live_players.push(LivePlayer {
+            enemy: !is_me && !is_ally,
+            lane: lane.to_string(),
+            champion: cname.clone(),
+            level: int(p.get("level")),
+            kills: int(scores.and_then(|s| s.get("kills"))),
+            deaths: int(scores.and_then(|s| s.get("deaths"))),
+            assists: int(scores.and_then(|s| s.get("assists"))),
+            cs: int(scores.and_then(|s| s.get("creepScore"))),
+            items: p
+                .get("items")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .map(|i| int(i.get("itemID")))
+                        .filter(|&id| id != 0)
+                        .collect()
+                })
+                .unwrap_or_default(),
+        });
+        if is_me || lane.is_empty() {
+            continue;
+        }
+        if is_ally {
             allies.insert(lane.to_string(), cname);
         } else {
             enemies.insert(lane.to_string(), cname);
@@ -124,6 +171,7 @@ pub fn parse_live(data: &Value) -> Option<LiveGame> {
         game_time,
         allies,
         enemies,
+        players: live_players,
     })
 }
 
@@ -139,5 +187,48 @@ mod tests {
         let val: Value = serde_json::from_str(&txt).unwrap();
         let g = parse_live(&val).unwrap();
         assert!(!g.champion.is_empty());
+        assert_eq!(g.players.len(), 10);
+        assert!(g.players.iter().all(|p| p.kills == 0));
+    }
+
+    #[test]
+    fn test_parse_live_scores_fixture() {
+        let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/live_scores.json");
+        let txt = std::fs::read_to_string(p).unwrap();
+        let val: Value = serde_json::from_str(&txt).unwrap();
+        let g = parse_live(&val).unwrap();
+        assert_eq!(g.players.len(), 10);
+        assert_eq!(g.players.iter().filter(|p| p.enemy).count(), 5);
+        assert!(g.players.iter().all(|p| p.level > 0 && !p.items.is_empty()));
+        let ahri = g.players.iter().find(|p| p.champion == "Ahri").unwrap();
+        assert!(ahri.enemy && ahri.kills == 8 && ahri.cs > 0);
+    }
+
+    #[test]
+    fn test_same_static_state_sees_enemy_level_and_items() {
+        let a = LiveGame {
+            champion: "A".into(),
+            role: "top".into(),
+            level: 5,
+            gold: 0.0,
+            items: vec![],
+            game_time: 10.0,
+            allies: Default::default(),
+            enemies: Default::default(),
+            players: vec![LivePlayer {
+                enemy: true,
+                lane: "middle".into(),
+                level: 5,
+                ..Default::default()
+            }],
+        };
+        let mut b = a.clone();
+        b.game_time = 20.0;
+        assert!(a.same_static_state(&b));
+        b.players[0].level = 6;
+        assert!(!a.same_static_state(&b));
+        b.players[0].level = 5;
+        b.players[0].items = vec![3157];
+        assert!(!a.same_static_state(&b));
     }
 }

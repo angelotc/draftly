@@ -2,6 +2,7 @@ use egui::{Align, Color32, CornerRadius, Layout, RichText, Sense, Stroke, Ui, Ve
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::domain::config::{load_ui_settings, save_ui_settings};
 use crate::domain::scoring::LANES;
 use crate::engine::controller::Controller;
 use crate::engine::views::{AllySlotView, ClientScreen, EnemySlotView, OddsView, PicksView, TIERS};
@@ -16,14 +17,20 @@ use crate::ui::theme::{ACCENT, AD, ALLY, ALLY_TEXT, AP, BG, BG2, CORAL, DIM, ENE
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DraftTab {
     Bans,
+    Picks,
+    Build,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PickMode {
     Blind,
     Best,
-    Build,
 }
 
 pub struct ClientUiState {
     pub chosen_tab: Option<DraftTab>,
     pub last_auto: Option<DraftTab>,
+    pub chosen_mode: Option<PickMode>,
     pub lane_picker_enemy: Option<i32>,
     pub copied_until: Option<Instant>,
     pub last_auto_copied_url: Option<String>,
@@ -37,14 +44,60 @@ impl Default for ClientUiState {
         Self {
             chosen_tab: None,
             last_auto: None,
+            chosen_mode: None,
             lane_picker_enemy: None,
             copied_until: None,
             last_auto_copied_url: None,
-            picks: PicksUiState::default(),
+            picks: PicksUiState::new(load_ui_settings().detailed_rows),
             build: BuildUiState::default(),
             explore: ExploreUiState::default(),
         }
     }
+}
+
+#[derive(Clone, Copy)]
+struct TabFlags {
+    bans: bool,
+    picks: bool,
+    blind: bool,
+    build: bool,
+}
+
+// Returns (auto tab, active tab, pick mode); resets stale choices in `st`.
+fn resolve_tabs(st: &mut ClientUiState, f: TabFlags) -> (Option<DraftTab>, Option<DraftTab>, PickMode) {
+    let auto_tab = if f.build {
+        Some(DraftTab::Build)
+    } else if f.bans {
+        Some(DraftTab::Bans)
+    } else if f.picks {
+        Some(DraftTab::Picks)
+    } else {
+        None
+    };
+    if auto_tab != st.last_auto {
+        st.last_auto = auto_tab;
+        st.chosen_tab = None;
+    }
+    if let Some(ch) = st.chosen_tab {
+        let valid = match ch {
+            DraftTab::Bans => f.bans,
+            DraftTab::Picks => f.picks,
+            DraftTab::Build => f.build,
+        };
+        if !valid {
+            st.chosen_tab = None;
+        }
+    }
+    if !f.picks {
+        st.chosen_mode = None;
+    }
+    let mode = match st.chosen_mode {
+        Some(PickMode::Blind) if f.blind => PickMode::Blind,
+        Some(PickMode::Best) => PickMode::Best,
+        _ if f.blind => PickMode::Blind,
+        _ => PickMode::Best,
+    };
+    (auto_tab, st.chosen_tab.or(auto_tab), mode)
 }
 
 fn cap_first(s: &str) -> String {
@@ -95,7 +148,7 @@ pub fn render_client(
                         .corner_radius(CornerRadius::same(3))
                         .inner_margin(egui::Margin::symmetric(4, 1))
                         .show(ui, |ui| {
-                            ui.label(RichText::new("Ctrl+X").size(10.0).strong().color(MUTED));
+                            ui.label(RichText::new(crate::domain::hotkey::current().to_string()).size(10.0).strong().color(MUTED));
                         });
 
                     if s.explore && !s.message.is_empty() && s.picks.is_none() {
@@ -185,37 +238,13 @@ pub fn render_client(
         .picks
         .as_ref()
         .is_some_and(|p| !p.blind.is_empty() && p.locked.is_none());
-    let has_best = s.picks.is_some();
+    let has_picks = s.picks.is_some();
     let has_build = s.build.is_some();
 
-    let auto_tab = if has_build {
-        Some(DraftTab::Build)
-    } else if has_bans {
-        Some(DraftTab::Bans)
-    } else if has_blind {
-        Some(DraftTab::Blind)
-    } else if has_best {
-        Some(DraftTab::Best)
-    } else {
-        None
-    };
-
-    if auto_tab != st.last_auto {
-        st.last_auto = auto_tab;
-        st.chosen_tab = None;
-    }
-    if let Some(ch) = st.chosen_tab {
-        let valid = match ch {
-            DraftTab::Bans => has_bans,
-            DraftTab::Blind => has_blind,
-            DraftTab::Best => has_best,
-            DraftTab::Build => has_build,
-        };
-        if !valid {
-            st.chosen_tab = None;
-        }
-    }
-    let active_tab = st.chosen_tab.or(auto_tab);
+    let (auto_tab, active_tab, pick_mode) = resolve_tabs(
+        st,
+        TabFlags { bans: has_bans, picks: has_picks, blind: has_blind, build: has_build },
+    );
 
     if auto_tab.is_some() {
         egui::Frame::new()
@@ -224,45 +253,35 @@ pub fn render_client(
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     let tabs = [
-                        (DraftTab::Bans, "1", "Bans", has_bans),
-                        (DraftTab::Blind, "2", "Blind pick", has_blind),
-                        (DraftTab::Best, "3", "Best picks", has_best),
+                        (DraftTab::Bans, "Bans", has_bans),
+                        (DraftTab::Picks, "Picks", has_picks),
                         (
                             DraftTab::Build,
-                            "4",
                             if has_build { "Build" } else { "Build · after lock-in" },
                             has_build,
                         ),
                     ];
-                    for (tab, num, lbl, enabled) in tabs {
+                    for (tab, lbl, enabled) in tabs {
                         let active = active_tab == Some(tab);
                         let is_auto = auto_tab == Some(tab);
                         ui.add_enabled_ui(enabled, |ui| {
                             let resp = ui.horizontal(|ui| {
-                                ui.label(
-                                    RichText::new(num)
-                                        .size(11.0)
-                                        .color(if active { ACCENT } else if enabled { MUTED } else { DIM }),
-                                );
                                 ui.label(
                                     strong(lbl)
                                         .size(12.0)
                                         .strong()
                                         .color(if active { TEXT } else if enabled { MUTED } else { DIM }),
                                 );
+                                // Reserved on every tab so widths stay put when the auto tab moves.
+                                let (dot, _) = ui.allocate_exact_size(Vec2::splat(6.0), Sense::hover());
                                 if is_auto {
-                                    egui::Frame::new()
-                                        .fill(CORAL)
-                                        .corner_radius(CornerRadius::same(8))
-                                        .inner_margin(egui::Margin::symmetric(6, 1))
-                                        .show(ui, |ui| {
-                                            ui.label(RichText::new("DRAFT IS HERE").size(9.5).strong().color(BG));
-                                        });
+                                    ui.painter().circle_filled(dot.center(), 3.0, CORAL);
                                 }
                             })
                             .response
                             .interact(Sense::click())
                             .on_hover_cursor(egui::CursorIcon::PointingHand);
+                            let resp = if is_auto { resp.on_hover_text("The draft is at this step") } else { resp };
                             if active {
                                 let y = resp.rect.bottom() + 4.0;
                                 ui.painter().line_segment(
@@ -341,14 +360,14 @@ pub fn render_client(
                                 render_bans(ui, b, imgs);
                             }
                         }
-                        DraftTab::Blind => {
+                        DraftTab::Picks => {
                             if let Some(p) = &s.picks {
-                                render_blind_picks(ui, p, imgs);
-                            }
-                        }
-                        DraftTab::Best => {
-                            if let Some(p) = &s.picks {
-                                render_best_picks(ui, p, &mut st.picks, imgs);
+                                render_picks_controls(ui, has_blind, pick_mode, st);
+                                ui.add_space(4.0);
+                                match pick_mode {
+                                    PickMode::Blind => render_blind_picks(ui, p, st.picks.detailed_rows, imgs),
+                                    PickMode::Best => render_best_picks(ui, p, &mut st.picks, imgs),
+                                }
                             }
                         }
                         DraftTab::Build => {
@@ -362,6 +381,36 @@ pub fn render_client(
                 }
             });
         });
+}
+
+fn render_picks_controls(ui: &mut Ui, has_blind: bool, mode: PickMode, st: &mut ClientUiState) {
+    // Fixed height so nothing shifts when the segment toggle appears or disappears.
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 24.0), Sense::hover());
+    let mut left = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(Layout::left_to_right(Align::Center)));
+    if has_blind {
+        left.spacing_mut().item_spacing.x = 2.0;
+        for (m, label) in [(PickMode::Blind, "Blind-safe"), (PickMode::Best, "Best matchup")] {
+            if left
+                .selectable_label(mode == m, label)
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .clicked()
+            {
+                st.chosen_mode = Some(m);
+            }
+        }
+    }
+    let mut right = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(Layout::right_to_left(Align::Center)));
+    let on = st.picks.detailed_rows;
+    if right
+        .selectable_label(on, "Details")
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text("Show the full breakdown for each pick")
+        .clicked()
+    {
+        st.picks.detailed_rows = !on;
+        let v = st.picks.detailed_rows;
+        save_ui_settings(|s| s.detailed_rows = v);
+    }
 }
 
 fn place_five<T: Clone>(items: &[T], lane_fn: impl Fn(&T) -> &str) -> [Option<T>; 5] {
@@ -637,4 +686,47 @@ fn render_odds(ui: &mut Ui, o: Option<&OddsView>, note: &str) {
             ui.label(RichText::new("The estimate moves once champions are locked in").size(10.0).color(MUTED));
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn flags(bans: bool, picks: bool, blind: bool, build: bool) -> TabFlags {
+        TabFlags { bans, picks, blind, build }
+    }
+
+    fn state() -> ClientUiState {
+        ClientUiState::default()
+    }
+
+    #[test]
+    fn blind_mode_falls_back_to_best_when_laner_picked() {
+        let mut st = state();
+        let (auto, active, mode) = resolve_tabs(&mut st, flags(false, true, true, false));
+        assert_eq!((auto, active, mode), (Some(DraftTab::Picks), Some(DraftTab::Picks), PickMode::Blind));
+        st.chosen_mode = Some(PickMode::Blind);
+        let (auto, active, mode) = resolve_tabs(&mut st, flags(false, true, false, false));
+        assert_eq!((auto, active, mode), (Some(DraftTab::Picks), Some(DraftTab::Picks), PickMode::Best));
+    }
+
+    #[test]
+    fn chosen_best_is_kept_while_blind_available() {
+        let mut st = state();
+        st.chosen_mode = Some(PickMode::Best);
+        let (_, _, mode) = resolve_tabs(&mut st, flags(false, true, true, false));
+        assert_eq!(mode, PickMode::Best);
+    }
+
+    #[test]
+    fn auto_tab_change_resets_choice_and_new_draft_clears_mode() {
+        let mut st = state();
+        resolve_tabs(&mut st, flags(true, true, false, false));
+        st.chosen_tab = Some(DraftTab::Picks);
+        st.chosen_mode = Some(PickMode::Best);
+        let (auto, active, _) = resolve_tabs(&mut st, flags(false, true, false, true));
+        assert_eq!((auto, active), (Some(DraftTab::Build), Some(DraftTab::Build)));
+        resolve_tabs(&mut st, flags(false, false, false, false));
+        assert_eq!(st.chosen_mode, None);
+    }
 }

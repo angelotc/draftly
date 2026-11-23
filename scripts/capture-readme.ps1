@@ -2,8 +2,8 @@
 param(
     [string]$Binary,
     [string]$CacheSeed = (Join-Path $env:LOCALAPPDATA 'league-analysis\cache'),
-    [ValidateSet('bans', 'blind', 'picks', 'build', 'explore', 'settings', 'ingame')]
-    [string[]]$Views = @('bans', 'blind', 'picks', 'build', 'explore', 'settings', 'ingame')
+    [ValidateSet('bans', 'blind', 'picks', 'details', 'build', 'explore', 'settings', 'ingame')]
+    [string[]]$Views = @('bans', 'blind', 'picks', 'details', 'build', 'explore', 'settings', 'ingame')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -95,7 +95,8 @@ try {
         if ($view -eq 'ingame') {
             $arguments = @(
                 '--simulate', '--role', 'support', '--players', '--items', '3158,3109',
-                '--champion', 'Leona', '--enemies', 'nautilus,caitlyn,ahri,viego,drmundo'
+                '--champion', 'Leona', '--enemies', 'nautilus,caitlyn,ahri,viego,drmundo',
+                '--fed', 'ahri'
             )
         } else {
             $replay = $emptyReplay
@@ -109,6 +110,15 @@ try {
             }
         }
         $arguments += @('--screenshot', $screenshot, '--config', $config)
+        # The details view is the picks draft with the Details toggle saved as on.
+        $uiSettings = Join-Path $appData 'settings.json'
+        $uiSettingsBackup = $null
+        if ($view -eq 'details') {
+            if (Test-Path -LiteralPath $uiSettings -PathType Leaf) {
+                $uiSettingsBackup = Get-Content -LiteralPath $uiSettings -Raw
+            }
+            Set-Content -LiteralPath $uiSettings -Value '{"detailed_rows":true}' -Encoding ASCII
+        }
         $commandLine = ($arguments | ForEach-Object { '"{0}"' -f $_ }) -join ' '
         $stdout = Join-Path $run "$view.stdout.log"
         $stderr = Join-Path $run "$view.stderr.log"
@@ -137,6 +147,13 @@ try {
                 }
             } finally {
                 $process.Dispose()
+            }
+            if ($view -eq 'details') {
+                if ($null -ne $uiSettingsBackup) {
+                    Set-Content -LiteralPath $uiSettings -Value $uiSettingsBackup -Encoding ASCII -NoNewline
+                } else {
+                    Remove-Item -LiteralPath $uiSettings -Force -ErrorAction SilentlyContinue
+                }
             }
         }
     }
