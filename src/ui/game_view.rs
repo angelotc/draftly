@@ -74,7 +74,7 @@ pub fn render_game_overlay(ui: &mut Ui, g: &GameScreen, imgs: &mut ImageCache) {
             ui.painter().text(
                 footer.center() + Vec2::new(0.0, 1.0),
                 egui::Align2::CENTER_CENTER,
-                "Ctrl+X to hide · Hover for details",
+                &format!("{} to hide · Hover for details", crate::domain::hotkey::current()),
                 egui::FontId::proportional(9.5),
                 MUTED,
             );
@@ -323,6 +323,27 @@ fn paint_item_icon(ui: &mut Ui, p: &PartView, sz: f32, imgs: &mut ImageCache) {
     resp.on_hover_text(tip);
 }
 
+/// Small "Fed 1.6x" / "Behind 0.6x" tag; nothing for near-even enemies.
+fn threat_tag(ui: &mut Ui, name: &str, m: f64) {
+    use crate::domain::threat::{BEHIND, FED};
+    let (text, color, tip) = if m >= FED {
+        (
+            format!("{name} Fed {m:.1}x"),
+            CORAL,
+            "Weighted more in your build because they are ahead.",
+        )
+    } else if m <= BEHIND {
+        (
+            format!("{name} Behind {m:.1}x"),
+            MUTED,
+            "Weighted less in your build because they are behind.",
+        )
+    } else {
+        return;
+    };
+    ui.label(RichText::new(text).size(9.0).color(color)).on_hover_text(tip);
+}
+
 fn render_ig_build(ui: &mut Ui, s: &IngameBuildView, imgs: &mut ImageCache) {
     ui.horizontal(|ui| {
         if let Some(c) = &s.champ {
@@ -398,7 +419,7 @@ fn render_ig_build(ui: &mut Ui, s: &IngameBuildView, imgs: &mut ImageCache) {
     }
 
     let opp_cols: Vec<_> = s.opponents.iter().take(4).collect();
-    for sec in &s.sections {
+    for (sec_idx, sec) in s.sections.iter().enumerate() {
         ui.add_space(4.0);
         let is_next = sec.state == "next";
         let bg = if is_next {
@@ -430,10 +451,16 @@ fn render_ig_build(ui: &mut Ui, s: &IngameBuildView, imgs: &mut ImageCache) {
                             .size(10.0)
                             .color(if is_next { CORAL } else { MUTED }),
                     );
+                    // Threat tags sit in the free space of the first header row, so nothing shifts.
+                    if sec_idx == 0 {
+                        for (e, _, m) in &s.opponents {
+                            threat_tag(ui, &e.name, *m);
+                        }
+                    }
                     if !opp_cols.is_empty() && sec.options.iter().any(|o| !o.vs.is_empty()) {
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             ui.allocate_space(Vec2::new(total_w, 16.0));
-                            for (e, lane) in opp_cols.iter().rev() {
+                            for (e, lane, _) in opp_cols.iter().rev() {
                                 let (r, resp) = ui.allocate_exact_size(Vec2::new(col_w, 16.0), Sense::hover());
                                 let ico_r = egui::Rect::from_center_size(r.center(), Vec2::splat(16.0));
                                 let mut sub = ui.new_child(
@@ -469,7 +496,7 @@ fn render_ig_build(ui: &mut Ui, s: &IngameBuildView, imgs: &mut ImageCache) {
                                     fmt_signed(o.matchup, 1)
                                 };
                                 ui.add_sized([total_w, 20.0], egui::Label::new(strong(txt).size(10.5).color(col)).halign(Align::Center));
-                                for (e, _) in opp_cols.iter().rev() {
+                                for (e, _, _) in opp_cols.iter().rev() {
                                     if let Some(v) = o.vs.iter().find(|v| v.champ.id == e.id) {
                                         let vc = if v.weighted >= 0.05 {
                                             POS
@@ -535,7 +562,7 @@ fn render_ig_build(ui: &mut Ui, s: &IngameBuildView, imgs: &mut ImageCache) {
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.label(RichText::new("Δ vs").size(9.0).color(DIM));
-            for (e, lane) in &opp_cols {
+            for (e, lane, _) in &opp_cols {
                 imgs.paint_icon(ui, &e.name, &e.icon, Vec2::splat(14.0), 3.0, Color32::WHITE)
                     .on_hover_text(format!("{} ({lane})", e.name));
             }

@@ -9,14 +9,15 @@ mod imp {
     use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_SZ, RegCreateKeyExW, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW, RegCloseKey};
     use windows_sys::Win32::System::Threading::{CreateEventW, CreateMutexW, EVENT_MODIFY_STATE, INFINITE, OpenEventW, SetEvent, WaitForSingleObject};
     use windows_sys::Win32::UI::HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForMonitor, MDT_EFFECTIVE_DPI, SetProcessDpiAwarenessContext};
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, RegisterHotKey};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState};
+    use crate::domain::hotkey::Hotkey;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CallWindowProcW, DefWindowProcW, DispatchMessageW, EnumWindows, FindWindowExW, FindWindowW, GA_ROOTOWNER,
-        GWL_EXSTYLE, GWLP_WNDPROC, GetAncestor, GetClassNameW, GetClientRect, GetForegroundWindow, GetMessageW,
+        CallWindowProcW, DefWindowProcW, EnumWindows, FindWindowExW, FindWindowW, GA_ROOTOWNER,
+        GWL_EXSTYLE, GWLP_WNDPROC, GetAncestor, GetClassNameW, GetClientRect, GetForegroundWindow,
         GetWindowLongPtrW, GetWindowLongW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, HWND_NOTOPMOST,
-        HWND_TOPMOST, IsIconic, IsWindowVisible, IsZoomed, MSG, SPI_GETWORKAREA, SW_RESTORE, SWP_NOACTIVATE, SWP_NOMOVE,
+        HWND_TOPMOST, IsIconic, IsWindowVisible, IsZoomed, SPI_GETWORKAREA, SW_RESTORE, SWP_NOACTIVATE, SWP_NOMOVE,
         SWP_NOSIZE, SWP_NOZORDER, SetWindowLongPtrW, SetWindowLongW, SetWindowPos, ShowWindow, SystemParametersInfoW,
-        TranslateMessage, WM_HOTKEY, WM_SIZING, WMSZ_BOTTOM, WMSZ_BOTTOMLEFT, WMSZ_BOTTOMRIGHT, WMSZ_LEFT,
+        WM_SIZING, WMSZ_BOTTOM, WMSZ_BOTTOMLEFT, WMSZ_BOTTOMRIGHT, WMSZ_LEFT,
         WMSZ_TOP, WMSZ_TOPLEFT, WMSZ_TOPRIGHT, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TRANSPARENT,
         SW_HIDE, SW_SHOW, SW_SHOWNA,
     };
@@ -103,23 +104,6 @@ mod imp {
             }
             while WaitForSingleObject(ev, INFINITE) == 0 {
                 on_show();
-            }
-        });
-    }
-
-    pub fn register_toggle_hotkey(on_hotkey: impl Fn() + Send + 'static) {
-        std::thread::spawn(move || unsafe {
-            if RegisterHotKey(std::ptr::null_mut(), 1, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, b'L' as u32) == 0 {
-                tracing::warn!("Ctrl+Shift+L is taken by another app; fallback hotkey disabled");
-            }
-            let mut msg: MSG = std::mem::zeroed();
-            while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
-                if msg.message == WM_HOTKEY && msg.wParam == 1 {
-                    on_hotkey();
-                } else {
-                    TranslateMessage(&msg);
-                    DispatchMessageW(&msg);
-                }
             }
         });
     }
@@ -396,11 +380,11 @@ mod imp {
         }
     }
 
-    pub fn ctrl_x_down() -> bool {
+    pub fn combo_down(hk: &Hotkey) -> bool {
         unsafe {
             let down = |vk: i32| (GetAsyncKeyState(vk) as u16 & 0x8000) != 0;
-            // Check X and Ctrl FIRST before checking Shift/Alt or window handles!
-            down(b'X' as i32) && down(0x11) && !down(0x10) && !down(0x12)
+            // Check the key first so idle polling stays cheap.
+            down(hk.vk as i32) && down(0x11) == hk.ctrl && down(0x10) == hk.shift && down(0x12) == hk.alt
         }
     }
 
@@ -614,7 +598,6 @@ mod imp {
     pub fn make_dpi_aware() {}
     pub fn claim_single_instance() -> bool { true }
     pub fn wait_show_requests(_: impl Fn() + Send + 'static) {}
-    pub fn register_toggle_hotkey(_: impl Fn() + Send + 'static) {}
     pub fn find_client() -> isize { 0 }
     pub fn find_window_by_title(_: &str) -> isize { 0 }
     pub fn find_game() -> isize { 0 }
@@ -650,7 +633,7 @@ mod imp {
     pub fn move_topmost(_: isize, _: Placement) {}
     pub fn set_rect(_: isize, _: Rect) {}
     pub fn bring_to_front(_: isize) {}
-    pub fn ctrl_x_down() -> bool { false }
+    pub fn combo_down(_: &crate::domain::hotkey::Hotkey) -> bool { false }
     pub fn autostart_enabled() -> bool { false }
     pub fn set_autostart(_: bool) {}
     pub fn lock_aspect(_: isize) {}

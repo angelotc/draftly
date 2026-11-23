@@ -47,6 +47,7 @@ impl TrayIds {
 enum TrayCmd {
     SetAutostart(bool),
     SetUpdateState(UpdateState),
+    SetToggleLabel(String),
 }
 
 #[derive(Clone)]
@@ -64,6 +65,11 @@ impl TrayHandle {
 
     pub fn set_update_state(&self, st: UpdateState) {
         let _ = self.tx.send(TrayCmd::SetUpdateState(st));
+        self.wake();
+    }
+
+    pub fn set_toggle_label(&self, label: String) {
+        let _ = self.tx.send(TrayCmd::SetToggleLabel(label));
         self.wake();
     }
 
@@ -85,8 +91,13 @@ impl TrayHandle {
 pub struct AppTray {
     tray: TrayIcon,
     ids: TrayIds,
+    toggle_item: MenuItem,
     update_item: Option<MenuItem>,
     autostart_item: CheckMenuItem,
+}
+
+pub fn toggle_label() -> String {
+    format!("Show / hide panel ({})", crate::domain::hotkey::current())
 }
 
 fn update_label_enabled(st: &UpdateState) -> Option<(&'static str, bool)> {
@@ -107,7 +118,7 @@ impl AppTray {
         let icon = Icon::from_rgba(rgba.into_raw(), w, h).map_err(|e| e.to_string())?;
 
         let menu = Menu::new();
-        let toggle = MenuItem::new("Show / hide panel (Ctrl+X)", true, None);
+        let toggle = MenuItem::new(toggle_label(), true, None);
         let update_item = update_label_enabled(initial_update).map(|(lbl, en)| MenuItem::new(lbl, en, None));
         let settings = MenuItem::new("Settings", true, None);
         let autostart = CheckMenuItem::new("Start with Windows", true, win32::autostart_enabled(), None);
@@ -140,9 +151,14 @@ impl AppTray {
         Ok(Self {
             tray,
             ids,
+            toggle_item: toggle,
             update_item,
             autostart_item: autostart,
         })
+    }
+
+    pub fn set_toggle_label(&self, label: &str) {
+        self.toggle_item.set_text(label);
     }
 
     pub fn ids(&self) -> TrayIds {
@@ -204,6 +220,7 @@ pub fn spawn_tray(initial_update: UpdateState) -> Option<(TrayHandle, TrayIds)> 
                     match cmd {
                         TrayCmd::SetAutostart(on) => app_tray.set_autostart_checked(on),
                         TrayCmd::SetUpdateState(st) => app_tray.set_update_state(&st),
+                        TrayCmd::SetToggleLabel(l) => app_tray.set_toggle_label(&l),
                     }
                 }
             }
@@ -214,6 +231,7 @@ pub fn spawn_tray(initial_update: UpdateState) -> Option<(TrayHandle, TrayIds)> 
                 match cmd {
                     TrayCmd::SetAutostart(on) => app_tray.set_autostart_checked(on),
                     TrayCmd::SetUpdateState(st) => app_tray.set_update_state(&st),
+                    TrayCmd::SetToggleLabel(l) => app_tray.set_toggle_label(&l),
                 }
             }
         }

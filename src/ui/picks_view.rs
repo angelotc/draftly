@@ -8,6 +8,46 @@ use crate::ui::theme::{ACCENT, ALLY, DIM, ENEMY, LINE, LINE2, MUTED, NEG, PANEL,
 #[derive(Default)]
 pub struct PicksUiState {
     pub selected_champ: Option<i32>,
+    pub detailed_rows: bool,
+    auto_selected_lock: Option<i32>,
+}
+
+impl PicksUiState {
+    pub fn new(detailed_rows: bool) -> Self {
+        Self { detailed_rows, ..Self::default() }
+    }
+}
+
+const SIMPLE_NOTE: &str = "Turn on Details for the full breakdown.";
+
+pub(super) fn best_reason(r: &RecView) -> String {
+    let top = r
+        .contributions
+        .iter()
+        .filter(|c| c.weighted != 0.0)
+        .max_by(|a, b| a.weighted.abs().total_cmp(&b.weighted.abs()));
+    let Some(c) = top else {
+        return "Strong overall".to_string();
+    };
+    let pos = c.weighted > 0.0;
+    match (c.kind.as_str(), pos) {
+        ("vs", true) => format!("Strong into {}", c.champ.name),
+        ("vs", false) => format!("Weak into {}", c.champ.name),
+        ("with", true) => format!("Good with {}", c.champ.name),
+        ("with", false) => format!("Awkward with {}", c.champ.name),
+        ("you" | "mastery", true) => "Your comfort pick".to_string(),
+        _ => "Strong overall".to_string(),
+    }
+}
+
+pub(super) fn blind_reason(b: &BlindView) -> String {
+    if b.value >= 0.0 {
+        "Safe blind pick".to_string()
+    } else if let Some(c) = b.counters.first() {
+        format!("Hardest matchup: {}", c.champ.name)
+    } else {
+        "Some counter risk".to_string()
+    }
 }
 
 struct TermCol {
@@ -98,6 +138,12 @@ impl TableColumns {
         widths[1] += name_extra;
         widths[5] += extra - name_extra - counter_extra;
         widths[7] += counter_extra;
+        Self::new(&widths, &[])
+    }
+
+    fn simple(viewport_width: f32) -> Self {
+        let mut widths = [22.0, 168.0, 72.0, 160.0];
+        widths[3] += Self::remaining_width(viewport_width, &widths, 0);
         Self::new(&widths, &[])
     }
 
@@ -298,18 +344,25 @@ pub fn render_best_picks(
         return;
     }
 
-    if let Some(locked) = &d.locked
-        && state.selected_champ.is_none()
-        && d.recs.iter().any(|r| r.champ.id == locked.id)
-    {
-        state.selected_champ = Some(locked.id);
+    match &d.locked {
+        Some(locked) => {
+            if state.auto_selected_lock != Some(locked.id) {
+                state.auto_selected_lock = Some(locked.id);
+                if d.recs.iter().any(|r| r.champ.id == locked.id) {
+                    state.selected_champ = Some(locked.id);
+                }
+            }
+        }
+        None => state.auto_selected_lock = None,
     }
     if state
         .selected_champ
-        .is_none_or(|id| !d.recs.iter().any(|r| r.champ.id == id))
+        .is_some_and(|id| !d.recs.iter().any(|r| r.champ.id == id))
     {
-        state.selected_champ = d.recs.first().map(|r| r.champ.id);
+        state.selected_champ = None;
     }
+    let detailed = state.detailed_rows;
+    let has_panel = state.selected_champ.is_some();
 
     let tcols = collect_term_cols(d);
     let n_vs = tcols.iter().filter(|c| c.kind == "vs").count();
@@ -331,7 +384,11 @@ pub fn render_best_picks(
     let max_cell = vals.into_iter().map(f64::abs).fold(1.0_f64, f64::max);
     let top_score = d.recs.iter().map(|r| r.score.abs()).fold(0.01_f64, f64::max);
 
-    let (main_w, side_w, gap) = table_panel_widths(ui);
+    let (main_w, side_w, gap) = if has_panel {
+        table_panel_widths(ui)
+    } else {
+        (ui.available_width().max(1.0), 0.0, 0.0)
+    };
     let height = ui.available_height();
 
     ui.horizontal_top(|ui| {
@@ -348,8 +405,36 @@ pub fn render_best_picks(
             table_with_note(
                 ui,
                 "picks_tbl",
-                "Each cell is the win-rate points that term adds to the score: strength, each matchup and duo, and your own games and mastery. Click a pick for the raw numbers.",
+                if detailed {
+                    "Each cell is the win-rate points that term adds to the score: strength, each matchup and duo, and your own games and mastery. Click a pick for the raw numbers."
+                } else {
+                    SIMPLE_NOTE
+                },
                 |ui| {
+                    if !detailed {
+                        let columns = TableColumns::simple(ui.available_width());
+                        simple_header(ui, &columns);
+                        for r in d.recs.iter() {
+                            let selected = state.selected_champ == Some(r.champ.id);
+                            let is_locked = d.locked.as_ref().is_some_and(|l| l.id == r.champ.id);
+                            let (row, resp) = columns.row(ui, 48.0, Sense::click());
+                            let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+                            if resp.clicked() {
+                                state.selected_champ = if selected { None } else { Some(r.champ.id) };
+                            }
+                            paint_row(ui, row, selected.then_some(ACCENT), resp.hovered(), is_locked);
+                            let row_data = SimpleRow {
+                                rank: r.rank,
+                                champ: &r.champ,
+                                score: r.score,
+                                top_score,
+                                reason: best_reason(r),
+                                rank_color: if selected { ACCENT } else { DIM },
+                            };
+                            paint_simple_row(ui, imgs, &columns, row, &row_data);
+                        }
+                        return;
+                    }
                     const FIRST_MATCHUP: usize = 4;
                     let own_idx = FIRST_MATCHUP + tcols.len();
                     let mut groups = vec![own_idx];
@@ -386,16 +471,16 @@ pub fn render_best_picks(
                     }
                     table_divider(ui, header);
 
-                    for (i, r) in d.recs.iter().enumerate() {
+                    for r in d.recs.iter() {
                         let selected = state.selected_champ == Some(r.champ.id);
                         let is_locked = d.locked.as_ref().is_some_and(|l| l.id == r.champ.id);
                         let (row, resp) = columns.row(ui, 48.0, Sense::click());
                         let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
                         if resp.clicked() {
-                            state.selected_champ = Some(r.champ.id);
+                            state.selected_champ = if selected { None } else { Some(r.champ.id) };
                         }
                         paint_row(ui, row, selected.then_some(ACCENT), resp.hovered(), is_locked);
-                        paint_rank(ui, columns.cell(row, 0), i, if selected { ACCENT } else { DIM });
+                        paint_rank(ui, columns.cell(row, 0), r.rank, if selected { ACCENT } else { DIM });
                         paint_table_champion(ui, imgs, columns.cell(row, 1), &r.champ);
                         table_text(ui, columns.champion_name(row), Align::Min, &r.champ.name, strong_font(14.0), TEXT);
                         let color = if r.score >= 0.0 { POS } else { NEG };
@@ -438,6 +523,9 @@ pub fn render_best_picks(
             );
         });
 
+        if !has_panel {
+            return;
+        }
         ui.add_space(gap);
         if let Some((idx, r)) = d.recs.iter().enumerate().find(|(_, r)| Some(r.champ.id) == state.selected_champ) {
             ui.allocate_ui_with_layout(Vec2::new(side_w, height), Layout::top_down(Align::Min), |ui| {
@@ -445,6 +533,32 @@ pub fn render_best_picks(
             });
         }
     });
+}
+
+fn simple_header(ui: &mut Ui, columns: &TableColumns) {
+    let (header, _) = columns.row(ui, 26.0, Sense::hover());
+    columns.champion_heading(ui, header, "Pick");
+    columns.heading(ui, header, 2, "Score", Align::Max);
+    table_text(ui, columns.cell(header, 3).with_min_x(columns.cell(header, 3).min.x + 10.0), Align::Min, "Why", FontId::proportional(11.0), MUTED);
+    table_divider(ui, header);
+}
+
+struct SimpleRow<'a> {
+    rank: usize,
+    champ: &'a ChampRef,
+    score: f64,
+    top_score: f64,
+    reason: String,
+    rank_color: Color32,
+}
+
+fn paint_simple_row(ui: &mut Ui, imgs: &mut ImageCache, columns: &TableColumns, row: Rect, r: &SimpleRow) {
+    paint_rank(ui, columns.cell(row, 0), r.rank, r.rank_color);
+    paint_table_champion(ui, imgs, columns.cell(row, 1), r.champ);
+    table_text(ui, columns.champion_name(row), Align::Min, &r.champ.name, strong_font(14.0), TEXT);
+    let color = if r.score >= 0.0 { POS } else { NEG };
+    paint_score(ui, columns.cell(row, 2), &fmt_signed(r.score, 2), color, (r.score.abs() / r.top_score) as f32);
+    table_text(ui, columns.cell(row, 3).with_min_x(columns.cell(row, 3).min.x + 10.0), Align::Min, &r.reason, FontId::proportional(12.5), TEXT2);
 }
 
 fn paint_heat(ui: &Ui, cell: Rect, id: egui::Id, val: Option<f64>, max: f64, tip: &str) {
@@ -667,7 +781,7 @@ fn detail_row(
     response.on_hover_text(label);
 }
 
-pub fn render_blind_picks(ui: &mut Ui, d: &PicksView, imgs: &mut ImageCache) {
+pub fn render_blind_picks(ui: &mut Ui, d: &PicksView, detailed: bool, imgs: &mut ImageCache) {
     let list: &[BlindView] = &d.blind;
     if list.is_empty() {
         ui.centered_and_justified(|ui| {
@@ -703,8 +817,31 @@ pub fn render_blind_picks(ui: &mut Ui, d: &PicksView, imgs: &mut ImageCache) {
     table_with_note(
         ui,
         "blind_tbl",
-        "Enemy laner not picked yet. Score = strength + team fit + blind risk. \"If countered\" is the average of the worst matchups that make up 15% of enemy picks.",
+        if detailed {
+            "Enemy laner not picked yet. Score = strength + team fit + blind risk. \"If countered\" is the average of the worst matchups that make up 15% of enemy picks."
+        } else {
+            SIMPLE_NOTE
+        },
         |ui| {
+            if !detailed {
+                let columns = TableColumns::simple(ui.available_width());
+                simple_header(ui, &columns);
+                for (i, r) in list.iter().enumerate() {
+                    let top = i == 0;
+                    let (row, _) = columns.row(ui, 48.0, Sense::hover());
+                    paint_row(ui, row, top.then_some(ACCENT), false, false);
+                    let row_data = SimpleRow {
+                        rank: r.rank,
+                        champ: &r.champ,
+                        score: r.score,
+                        top_score,
+                        reason: blind_reason(r),
+                        rank_color: if top { ACCENT } else { DIM },
+                    };
+                    paint_simple_row(ui, imgs, &columns, row, &row_data);
+                }
+                return;
+            }
             const TRACK: usize = 5;
             let columns = TableColumns::blind(ui.available_width());
             let (header, _) = columns.row(ui, 38.0, Sense::hover());
@@ -723,7 +860,7 @@ pub fn render_blind_picks(ui: &mut Ui, d: &PicksView, imgs: &mut ImageCache) {
                 let top = i == 0;
                 let (row, response) = columns.row(ui, 48.0, Sense::hover());
                 paint_row(ui, row, top.then_some(ACCENT), false, false);
-                paint_rank(ui, columns.cell(row, 0), i, if top { ACCENT } else { DIM });
+                paint_rank(ui, columns.cell(row, 0), r.rank, if top { ACCENT } else { DIM });
                 paint_table_champion(ui, imgs, columns.cell(row, 1), &r.champ);
                 table_text(ui, columns.champion_name(row), Align::Min, &r.champ.name, strong_font(14.0), TEXT);
                 let color = if r.score >= 0.0 { POS } else { NEG };
@@ -817,4 +954,68 @@ fn paint_blind_track(ui: &Ui, track: Rect, lo: f64, hi: f64, r: &BlindView) {
     p.circle_filled(at_center(mean), 5.0, TEXT);
     p.text(at_center(tail - 8.0), Align2::RIGHT_CENTER, fmt_signed(r.tail, 1), strong_font(12.0), NEG);
     p.text(at_center(mean + 8.0), Align2::LEFT_CENTER, fmt_signed(r.mean, 1), FontId::proportional(12.0), TEXT2);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn champ(name: &str) -> ChampRef {
+        ChampRef { id: 1, name: name.to_string(), icon: String::new() }
+    }
+
+    fn contrib(kind: &str, name: &str, weighted: f64) -> ContribView {
+        ContribView {
+            champ: champ(name),
+            kind: kind.to_string(),
+            lane: String::new(),
+            delta: 0.0,
+            games: 0,
+            weighted,
+            tentative: false,
+        }
+    }
+
+    fn rec(contributions: Vec<ContribView>) -> RecView {
+        RecView { rank: 0, champ: champ("Pick"), score: 0.0, base: 0.0, contributions }
+    }
+
+    fn blind(value: f64, counters: &[&str]) -> BlindView {
+        BlindView {
+            rank: 0,
+            champ: champ("Pick"),
+            score: 0.0,
+            value,
+            mean: 0.0,
+            tail: 0.0,
+            synergy: 0.0,
+            coverage: 0,
+            counters: counters
+                .iter()
+                .map(|n| crate::engine::views::CounterView { champ: champ(n), delta: -2.0, games: 10 })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn best_reason_uses_largest_magnitude() {
+        let r = rec(vec![contrib("with", "Jinx", 0.4), contrib("vs", "Zed", -1.2), contrib("vs", "Ahri", 0.9)]);
+        assert_eq!(best_reason(&r), "Weak into Zed");
+        let r = rec(vec![contrib("with", "Jinx", 1.4), contrib("vs", "Zed", -1.2)]);
+        assert_eq!(best_reason(&r), "Good with Jinx");
+        let r = rec(vec![contrib("vs", "Zed", 1.4)]);
+        assert_eq!(best_reason(&r), "Strong into Zed");
+        let r = rec(vec![contrib("with", "Jinx", -2.0)]);
+        assert_eq!(best_reason(&r), "Awkward with Jinx");
+        let r = rec(vec![contrib("mastery", "", 2.0), contrib("vs", "Zed", 0.5)]);
+        assert_eq!(best_reason(&r), "Your comfort pick");
+        assert_eq!(best_reason(&rec(vec![])), "Strong overall");
+    }
+
+    #[test]
+    fn blind_reason_depends_on_risk() {
+        assert_eq!(blind_reason(&blind(0.3, &["Zed"])), "Safe blind pick");
+        assert_eq!(blind_reason(&blind(-0.3, &["Zed", "Ahri"])), "Hardest matchup: Zed");
+        assert_eq!(blind_reason(&blind(-0.3, &[])), "Some counter risk");
+    }
 }

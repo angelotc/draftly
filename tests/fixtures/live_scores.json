@@ -1,0 +1,499 @@
+{
+  "activePlayer": {
+    "riotId": "Leona#NA1",
+    "summonerName": "Leona#NA1",
+    "level": 13,
+    "currentGold": 842.5
+  },
+  "allPlayers": [
+    {
+      "championName": "Garen",
+      "team": "ORDER",
+      "position": "TOP",
+      "riotId": "Garen#NA1",
+      "summonerName": "Garen#NA1",
+      "level": 11,
+      "isBot": false,
+      "isDead": false,
+      "respawnTimer": 0.0,
+      "scores": {
+        "kills": 2,
+        "deaths": 3,
+        "assists": 2,
+        "creepScore": 118,
+        "wardScore": 0.0
+      },
+      "items": [
+        {
+          "itemID": 3047,
+          "slot": 0,
+          "price": 1100,
+          "count": 1,
+          "displayName": "Plated Steelcaps",
+          "canUse": false,
+          "consumable": false
+        },
+        {
+          "itemID": 3157,
+          "slot": 1,
+          "price": 3250,
+          "count": 1,
+          "displayName": "Zhonya's Hourglass",
+          "canUse": false,
+          "consumable": false
+        }
+      ],
+      "skinID": 0
+    },
+    {
+      "championName": "Sejuani",
+      "team": "ORDER",
+      "position": "JUNGLE",
+      "riotId": "Sejuani#NA1",
+      "summonerName": "Sejuani#NA1",
+      "level": 14,
+      "isBot": false,
+      "isDead": false,
+      "respawnTimer": 0.0,
+      "scores": {
+        "kills": 1,
+        "deaths": 2,
+        "assists": 5,
+        "creepScore": 80,
+        "wardScore": 1.0
+      },
+      "items": [
+        {
+          "itemID": 3157,
+          "slot": 0,
+          "price": 3250,
+          "count": 1,
+          "displayName": "Zhonya's Hourglass",
+          "canUse": false,
+          "consumable": false
+        },
+        {
+          "itemID": 6655,
+          "slot": 1,
+          "price": 3000,
+          "count": 1,
+          "displayName": "Luden's Companion",
+          "canUse": false,
+          "consumable": false
+        },
+        {
+          "itemID": 3089,
+          "slot": 2,
+          "price": 3600,
+          "count": 1,
+          "displayName": "Rabadon's Deathcap",
+          "canUse": false,
+          "consumable": false
+        },
+        {
+          "itemID": 1056,
+          "slot": 3,
+          "price": 400,
+          "count": 1,
+          "displayName": "Doran's Ring",
+          "canUse": false,
+          "consumable": false
+        }
+      ],
+      "skinID": 0
+    },
+    {
+      "championName": "Orianna",
+      "team": "ORDER",
+      "position": "MIDDLE",
+      "riotId": "Orianna#NA1",
+      "summonerName": "Orianna#NA1",
+      "level": 12,
+      "isBot": false,
+      "isDead": false,
+      "respawnTimer": 0.0,
+      "scores": {
+        "kills": 3,
+        "deaths": 2,
+        "assists": 4,
+        "creepScore": 125,
+        "wardScore": 2.0
+      },
+      "items": [
+        {
+          "itemID": 6655,
+          "slot": 0,
+          "price": 3000,
+          "count": 1,
+          "displayName": "Luden's Companion",
+          "canUse": false,
+          "consumable": false
+        },
+        {
+          "itemID": 3089,
+          "slot": 1,
+          "price": 3600,
+          "count": 1,
+          "displayName": "Rabadon's Deathcap",
+          "canUse": false,
+          "consumable": false
+        }
+      ],
+      "skinID": 0
+    },
+    {
+      "championName": "Jinx",
+      "team": "ORDER",
+      "position": "BOTTOM",
+      "riotId": "Jinx#NA1",
+      "summonerName": "Jinx#NA1",
+      "level": 15,
+      "isBot": false,
+      "isDead": false,
+      "respawnTimer": 0.0,
+      "scores": {
+        "kills": 4,
+        "deaths": 3,
+        "assists": 4,
+        "creepScore": 140,
+        "wardScore": 3.0
+      },
+      "items": [
+        {
+          "itemID": 3089,
+          "slot": 0,
+          "price": 3600,
+          "count": 1,
+          "displayName": "Rabadon's Deathcap",
+          "canUse": false,
+          "consumable": false
+        },
+        {
+          "itemID": 1056,
+          "slot": 1,
+          "price": 400,
+          "count": 1,
+          "displayName": "Doran's Ring",
+          "canUse": false,
+          "consumable": false
+        },
+        {
+          "itemID": 2003,
+          "slot": 2,
+          "price": 50,
+          "count": 1,
+          "displayName": "Health Potion",
+          "canUse": false,
+          "consumable": false
+        },
+        {
+          "itemID": 3006,
+          "slot": 3,
+          "price": 1100,
+          "count": 1,
+          "displayName": "Berserker's Greaves",
+          "canUse": false,
+          "consumable": false
+        }
+      ],
+      "skinID": 0
+    },
+    {
+      "championName": "Leona",
+      "team": "ORDER",
+      "position": "UTILITY",
+      "riotId": "Leona#NA1",
+      "summonerName": "Leona#NA1",
+      "level": 13,
+      "isBot": false,
+      "isDead": false,
+      "respawnTimer": 0.0,
+      "scores": {
+        "kills": 1,
+        "deaths": 3,
+        "assists": 9,
+        "creepScore": 22,
+        "wardScore": 4.0
+      },
+      "items": [
+        {
+          "itemID": 1056,
+          "slot": 0,
+          "price": 400,
+          "count": 1,
+          "displayName": "Doran's Ring",
+          "canUse": false,
+          "consumable": false
+        },
+        {
+          "itemID": 2003,
+          "slot": 1,
+          "price": 50,
+          "count": 1,
+          "displayName": "Health Potion",
+          "canUse": false,
+          "consumable": false
+        }
+      ],
+      "skinID": 0
+    },
+    {
+      "championName": "Darius",
+      "team": "CHAOS",
+      "position": "TOP",
+      "riotId": "Darius#NA1",
+      "summonerName": "Darius#NA1",
+      "level": 11,
+      "isBot": false,
+      "isDead": false,
+      "respawnTimer": 0.0,
+      "scores": {
+        "kills": 3,
+        "deaths": 3,
+        "assists": 1,
+        "creepScore": 121,
+        "wardScore": 5.0
+      },
+      "items": [
+        {
+          "itemID": 2003,
+          "slot": 0,
+          "price": 50,
+          "count": 1,
+          "displayName": "Health Potion",
+          "canUse": false,
+          "consumable": false
+        },
+        {
+          "itemID": 3006,
+          "slot": 1,
+          "price": 1100,
+          "count": 1,
+          "displayName": "Berserker's Greaves",
+          "canUse": false,
+          "consumable": false
+        },
+        {
+          "itemID": 3031,
+          "slot": 2,
+          "price": 3400,
+          "count": 1,
+          "displayName": "Infinity Edge",
+          "canUse": false,
+          "consumable": false
+        },
+        {
+          "itemID": 3047,
+          "slot": 3,
+          "price": 1100,
+          "count": 1,
+          "displayName": "Plated Steelcaps",
+          "canUse": false,
+          "consumable": false
+        }
+      ],
+      "skinID": 0
+    },
+    {
+      "championName": "Viego",
+      "team": "CHAOS",
+      "position": "JUNGLE",
+      "riotId": "Viego#NA1",
+      "summonerName": "Viego#NA1",
+      "level": 14,
+      "isBot": false,
+      "isDead": false,
+      "respawnTimer": 0.0,
+      "scores": {
+        "kills": 4,
+        "deaths": 2,
+        "assists": 6,
+        "creepScore": 88,
+        "wardScore": 6.0
+      },
+      "items": [
+        {
+          "itemID": 3006,
+          "slot": 0,
+          "price": 1100,
+          "count": 1,
+          "displayName": "Berserker's Greaves",
+          "canUse": false,
+          "consumable": false
+        },
+        {
+          "itemID": 3031,
+          "slot": 1,
+          "price": 3400,
+          "count": 1,
+          "displayName": "Infinity Edge",
+          "canUse": false,
+          "consumable": false
+        }
+      ],
+      "skinID": 0
+    },
+    {
+      "championName": "Ahri",
+      "team": "CHAOS",
+      "position": "MIDDLE",
+      "riotId": "Ahri#NA1",
+      "summonerName": "Ahri#NA1",
+      "level": 12,
+      "isBot": false,
+      "isDead": false,
+      "respawnTimer": 0.0,
+      "scores": {
+        "kills": 8,
+        "deaths": 1,
+        "assists": 5,
+        "creepScore": 142,
+        "wardScore": 7.0
+      },
+      "items": [
+        {
+          "itemID": 3031,
+          "slot": 0,
+          "price": 3400,
+          "count": 1,
+          "displayName": "Infinity Edge",
+          "canUse": false,
+          "consumable": false
+        },
+        {
+          "itemID": 3047,
+          "slot": 1,
+          "price": 1100,
+          "count": 1,
+          "displayName": "Plated Steelcaps",
+          "canUse": false,
+          "consumable": false
+        },
+        {
+          "itemID": 3157,
+          "slot": 2,
+          "price": 3250,
+          "count": 1,
+          "displayName": "Zhonya's Hourglass",
+          "canUse": false,
+          "consumable": false
+        },
+        {
+          "itemID": 6655,
+          "slot": 3,
+          "price": 3000,
+          "count": 1,
+          "displayName": "Luden's Companion",
+          "canUse": false,
+          "consumable": false
+        }
+      ],
+      "skinID": 0
+    },
+    {
+      "championName": "Caitlyn",
+      "team": "CHAOS",
+      "position": "BOTTOM",
+      "riotId": "Caitlyn#NA1",
+      "summonerName": "Caitlyn#NA1",
+      "level": 15,
+      "isBot": false,
+      "isDead": false,
+      "respawnTimer": 0.0,
+      "scores": {
+        "kills": 2,
+        "deaths": 4,
+        "assists": 3,
+        "creepScore": 133,
+        "wardScore": 8.0
+      },
+      "items": [
+        {
+          "itemID": 3047,
+          "slot": 0,
+          "price": 1100,
+          "count": 1,
+          "displayName": "Plated Steelcaps",
+          "canUse": false,
+          "consumable": false
+        },
+        {
+          "itemID": 3157,
+          "slot": 1,
+          "price": 3250,
+          "count": 1,
+          "displayName": "Zhonya's Hourglass",
+          "canUse": false,
+          "consumable": false
+        }
+      ],
+      "skinID": 0
+    },
+    {
+      "championName": "Nautilus",
+      "team": "CHAOS",
+      "position": "UTILITY",
+      "riotId": "Nautilus#NA1",
+      "summonerName": "Nautilus#NA1",
+      "level": 13,
+      "isBot": false,
+      "isDead": false,
+      "respawnTimer": 0.0,
+      "scores": {
+        "kills": 0,
+        "deaths": 5,
+        "assists": 7,
+        "creepScore": 24,
+        "wardScore": 9.0
+      },
+      "items": [
+        {
+          "itemID": 3157,
+          "slot": 0,
+          "price": 3250,
+          "count": 1,
+          "displayName": "Zhonya's Hourglass",
+          "canUse": false,
+          "consumable": false
+        },
+        {
+          "itemID": 6655,
+          "slot": 1,
+          "price": 3000,
+          "count": 1,
+          "displayName": "Luden's Companion",
+          "canUse": false,
+          "consumable": false
+        },
+        {
+          "itemID": 3089,
+          "slot": 2,
+          "price": 3600,
+          "count": 1,
+          "displayName": "Rabadon's Deathcap",
+          "canUse": false,
+          "consumable": false
+        },
+        {
+          "itemID": 1056,
+          "slot": 3,
+          "price": 400,
+          "count": 1,
+          "displayName": "Doran's Ring",
+          "canUse": false,
+          "consumable": false
+        }
+      ],
+      "skinID": 0
+    }
+  ],
+  "events": {
+    "Events": []
+  },
+  "gameData": {
+    "gameMode": "CLASSIC",
+    "gameTime": 1260.4,
+    "mapName": "Map11",
+    "mapNumber": 11
+  }
+}

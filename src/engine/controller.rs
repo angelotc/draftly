@@ -12,6 +12,7 @@ use crate::domain::lcu::LcuCreds;
 use crate::domain::live::{LiveGame, parse_live};
 use crate::domain::players::PlayerStats;
 use crate::domain::scoring::{ChampStats, Comfort, DraftOdds, LANES, draft_odds};
+use crate::domain::threat;
 use crate::domain::state::{Event, Session, Stage};
 use crate::data::lcu::{LcuClient, read_lockfile};
 use crate::data::lcu_data::{Mastery, fetch_mastery, sync_history};
@@ -55,6 +56,9 @@ fn current_hms() -> String {
     format!("{h:02}:{m:02}:{s:02}")
 }
 
+/// (champion id, role, tier, enemy lane -> id, off-lane enemies given a floor weight)
+type BuildKey = (i32, String, String, Vec<(String, i32)>, Vec<String>);
+
 struct InnerState {
     cfg: Config,
     session: Session,
@@ -66,8 +70,8 @@ struct InnerState {
     last_odds: Option<DraftOdds>,
     stats_pending: HashSet<(i32, String)>,
     stats_retry_at: HashMap<(i32, String), Instant>,
-    build_cache: Option<((i32, String, String, Vec<(String, i32)>), BuildEvaluation)>,
-    build_pending: HashSet<(i32, String, String, Vec<(String, i32)>)>,
+    build_cache: Option<(BuildKey, BuildEvaluation)>,
+    build_pending: HashSet<BuildKey>,
     pool_loading: HashSet<(String, String)>,
     mastery: HashMap<i32, Mastery>,
     synced_at: Option<Instant>,
@@ -371,7 +375,7 @@ impl Controller {
                 let live = st.live.clone();
                 let last_role = st.last_role.clone();
                 let build_cache = st.build_cache.clone();
-                let _cfg = st.cfg.clone();
+                let cfg = st.cfg.clone();
                 drop(st);
 
                 if need_players {
@@ -400,15 +404,38 @@ impl Controller {
                             .collect();
                         let mut sorted_e: Vec<(String, i32)> = enemies.iter().map(|(l, &c)| (l.clone(), c)).collect();
                         sorted_e.sort();
-                        let key = (cid, role.clone(), tier.clone(), sorted_e);
+                        let lane_threat: HashMap<String, f64> = if cfg.threat_scaling {
+                            threat::threat(&g.players, g.game_time, |id| {
+                                rec.assets.items.get(&id).map_or(0, |it| it.gold)
+                            })
+                        } else {
+                            HashMap::new()
+                        };
+                        let weights = cfg.build_weights_for(&role);
+                        let mut extra_lanes: Vec<String> = lane_threat
+                            .iter()
+                            .filter(|&(lane, &m)| m >= threat::FED && !weights.contains_key(lane.as_str()))
+                            .map(|(lane, _)| lane.clone())
+                            .collect();
+                        extra_lanes.sort();
+                        let key = (cid, role.clone(), tier.clone(), sorted_e, extra_lanes.clone());
                         if let Some((ck, bev)) = &build_cache
                             && *ck == key
                         {
-                            build = Some(ingame_build_view(g, Some(bev), &rec.champs, &rec.assets));
+                            let mult: HashMap<i32, f64> = lane_threat
+                                .iter()
+                                .filter_map(|(lane, &m)| enemies.get(lane).map(|&id| (id, m)))
+                                .collect();
+                            let scaled = bev.with_threat(&mult);
+                            build = Some(ingame_build_view(g, Some(&scaled), &rec.champs, &rec.assets));
                         } else {
                             build_note = "Loading build...".to_string();
                             kind = "waiting".to_string();
-                            self_arc.clone().spawn_build(key, enemies);
+                            let extra: HashMap<String, f64> = extra_lanes
+                                .into_iter()
+                                .map(|l| (l, threat::FLOOR_WEIGHT))
+                                .collect();
+                            self_arc.clone().spawn_build(key, enemies, extra);
                         }
                     } else {
                         build_note = "No build: champion or role unknown in this game.".to_string();
@@ -529,7 +556,7 @@ impl Controller {
         }
 
         let odds = self.compute_odds(&self_arc, &rec, &ev, &cfg);
-        let picks = picks_view(&ev, &rec.champs, &enemy_lanes, odds.as_ref());
+        let picks = picks_view(&ev, &rec.champs, &enemy_lanes, odds.as_ref(), cfg.picks_shown);
 
         let bans = if stage == Stage::Ban {
             rec.bans(&draft, pickable.as_ref(), &comfort)
@@ -549,13 +576,13 @@ impl Controller {
                 .collect();
             let mut sorted_e: Vec<(String, i32)> = enemies.iter().map(|(l, &c)| (l.clone(), c)).collect();
             sorted_e.sort();
-            let key = (ev.draft.my_locked, ev.role.clone(), tier.clone(), sorted_e);
+            let key = (ev.draft.my_locked, ev.role.clone(), tier.clone(), sorted_e, Vec::new());
             if let Some((ck, bev)) = &build_cache
                 && *ck == key
             {
                 Some(build_view(bev, &rec.champs, &rec.assets))
             } else {
-                self_arc.clone().spawn_build(key, enemies);
+                self_arc.clone().spawn_build(key, enemies, HashMap::new());
                 None
             }
         } else {
@@ -718,8 +745,9 @@ impl Controller {
 
     fn spawn_build(
         self: Arc<Self>,
-        key: (i32, String, String, Vec<(String, i32)>),
+        key: BuildKey,
         enemies: HashMap<String, i32>,
+        extra: HashMap<String, f64>,
     ) {
         {
             let mut st = self.state.lock().unwrap();
@@ -729,7 +757,7 @@ impl Controller {
         }
         tokio::spawn(async move {
             if let Some(rec) = self.get_rec() {
-                let bev = rec.build(key.0, &key.1, &enemies).await;
+                let bev = rec.build(key.0, &key.1, &enemies, &extra).await;
                 let mut st = self.state.lock().unwrap();
                 st.build_cache = Some((key.clone(), bev));
                 st.build_pending.remove(&key);

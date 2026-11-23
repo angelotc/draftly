@@ -84,6 +84,7 @@ pub struct ContribView {
 
 #[derive(Debug, Clone)]
 pub struct RecView {
+    pub rank: usize,
     pub champ: ChampRef,
     pub score: f64,
     pub base: f64,
@@ -99,6 +100,7 @@ pub struct CounterView {
 
 #[derive(Debug, Clone)]
 pub struct BlindView {
+    pub rank: usize,
     pub champ: ChampRef,
     pub score: f64,
     pub value: f64,
@@ -284,7 +286,8 @@ pub struct IngameBuildView {
     pub gold: i32,
     pub time_secs: i32,
     pub empty: Option<String>,
-    pub opponents: Vec<(ChampRef, String)>,
+    /// (champion, lane, threat multiplier; 1.0 when neutral)
+    pub opponents: Vec<(ChampRef, String, f64)>,
     pub damage: Option<DamageSplitView>,
     pub core: Vec<PartView>,
     pub next: Option<PartView>,
@@ -407,11 +410,16 @@ pub fn header_view(role: Option<&str>, tier: &str, days: u32) -> HeaderView {
     }
 }
 
+fn keep_row(index: usize, champion_id: i32, shown: usize, locked: i32) -> bool {
+    index < shown || (locked != 0 && champion_id == locked)
+}
+
 pub fn picks_view(
     ev: &Evaluation,
     champs: &Champions,
     enemy_lanes: &HashMap<i32, String>,
     odds: Option<&DraftOdds>,
+    picks_shown: usize,
 ) -> PicksView {
     let found = ev
         .recs
@@ -476,7 +484,10 @@ pub fn picks_view(
     let blind = ev
         .blind
         .iter()
-        .map(|b| BlindView {
+        .enumerate()
+        .filter(|(i, b)| keep_row(*i, b.champion_id, picks_shown, ev.draft.my_locked))
+        .map(|(rank, b)| BlindView {
+            rank,
             champ: ChampRef::from_id(b.champion_id, champs),
             score: r2(b.score),
             value: r2(b.value),
@@ -499,10 +510,13 @@ pub fn picks_view(
     let recs = ev
         .recs
         .iter()
-        .map(|r| {
+        .enumerate()
+        .filter(|(i, r)| keep_row(*i, r.champion_id, picks_shown, ev.draft.my_locked))
+        .map(|(rank, r)| {
             let mut cs = r.contributions.clone();
             cs.sort_by(|a, b| b.weighted.abs().total_cmp(&a.weighted.abs()));
             RecView {
+                rank,
                 champ: ChampRef::from_id(r.champion_id, champs),
                 score: r2(r.score),
                 base: r2(r.base),
@@ -651,8 +665,13 @@ pub fn damage_split(bev: Option<&BuildEvaluation>, champs: &Champions) -> Option
         (p, m, t)
     };
     let mut total = HashMap::new();
+    let weight = |cid: i32| bev.threat.get(&cid).copied().unwrap_or(1.0);
     for key in ["physical", "magic", "true"] {
-        let s: f64 = bev.damage.values().map(|d| d.get(key).copied().unwrap_or(0.0)).sum();
+        let s: f64 = bev
+            .damage
+            .iter()
+            .map(|(&cid, d)| d.get(key).copied().unwrap_or(0.0) * weight(cid))
+            .sum();
         total.insert(key.to_string(), s);
     }
     let (tp, tm, tt) = pct(&total);
@@ -1249,7 +1268,13 @@ pub fn ingame_build_view(
         opponents: b
             .vs
             .iter()
-            .map(|(e, l, _, _)| (ChampRef::from_id(*e, champs), l.clone()))
+            .map(|(e, l, _, _)| {
+                (
+                    ChampRef::from_id(*e, champs),
+                    l.clone(),
+                    bev.and_then(|x| x.threat.get(e).copied()).unwrap_or(1.0),
+                )
+            })
             .collect(),
         damage: damage_split(bev, champs),
         core: path,
@@ -1429,5 +1454,40 @@ pub fn explore_report_view(
                     .collect(),
             })
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::lcu::DraftState;
+    use crate::domain::scoring::Recommendation;
+
+    fn eval(n: i32, locked: i32) -> Evaluation {
+        let recs = (1..=n)
+            .map(|id| Recommendation { champion_id: id, score: (n - id) as f64, base: 0.0, contributions: vec![] })
+            .collect();
+        Evaluation {
+            draft: DraftState { my_locked: locked, ..Default::default() },
+            role: "support".into(),
+            recs,
+            lanes: HashMap::new(),
+            enemy_rates: HashMap::new(),
+            blind: vec![],
+        }
+    }
+
+    #[test]
+    fn picks_view_truncates_to_picks_shown() {
+        let v = picks_view(&eval(8, 0), &Champions::default(), &HashMap::new(), None, 3);
+        let ids: Vec<i32> = v.recs.iter().map(|r| r.champ.id).collect();
+        assert_eq!(ids, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn picks_view_keeps_lower_ranked_locked_champion_with_true_rank() {
+        let v = picks_view(&eval(8, 7), &Champions::default(), &HashMap::new(), None, 3);
+        let rows: Vec<(i32, usize)> = v.recs.iter().map(|r| (r.champ.id, r.rank)).collect();
+        assert_eq!(rows, vec![(1, 0), (2, 1), (3, 2), (7, 6)]);
     }
 }

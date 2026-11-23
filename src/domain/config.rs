@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use toml_edit::{DocumentMut, Item, Table, Value};
 use tracing::warn;
 
+use super::hotkey::Hotkey;
 use super::scoring::{BlindConfig, LANES, OddsConfig};
 
 pub const DEFAULT_LOCKFILE: &str = r"C:\Riot Games\League of Legends\lockfile";
@@ -236,6 +237,20 @@ impl Default for StreamConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
+pub struct HotkeysConfig {
+    pub toggle: String,
+}
+
+impl Default for HotkeysConfig {
+    fn default() -> Self {
+        Self {
+            toggle: Hotkey::DEFAULT.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct Config {
     pub min_pick_rate: f64,
     pub tier: String,
@@ -245,6 +260,7 @@ pub struct Config {
     pub k: f64,
     pub tentative_factor: f64,
     pub top_n: usize,
+    pub picks_shown: usize,
     pub ban_count: usize,
     pub ban_vs_top: usize,
     pub build_k: f64,
@@ -255,12 +271,14 @@ pub struct Config {
     pub weights: HashMap<String, RoleWeightsOverride>,
     pub comfort: ComfortOverride,
     pub comfort_only: bool,
+    pub threat_scaling: bool,
     pub odds: OddsConfig,
     pub blind: BlindConfig,
     pub record_games: bool,
     pub record_every: f64,
     pub opgg: bool,
     pub stream: StreamConfig,
+    pub hotkeys: HotkeysConfig,
 }
 
 impl Default for Config {
@@ -274,6 +292,7 @@ impl Default for Config {
             k: 500.0,
             tentative_factor: 0.5,
             top_n: 8,
+            picks_shown: 5,
             ban_count: 5,
             ban_vs_top: 5,
             build_k: 300.0,
@@ -284,17 +303,24 @@ impl Default for Config {
             weights: HashMap::new(),
             comfort: ComfortOverride::default(),
             comfort_only: false,
+            threat_scaling: true,
             odds: OddsConfig::default(),
             blind: BlindConfig::default(),
             record_games: false,
             record_every: 15.0,
             opgg: true,
             stream: StreamConfig::default(),
+            hotkeys: HotkeysConfig::default(),
         }
     }
 }
 
 impl Config {
+    /// The show/hide combo; an unparseable value falls back to the default.
+    pub fn hotkey(&self) -> Hotkey {
+        Hotkey::parse(&self.hotkeys.toggle).unwrap_or(Hotkey::DEFAULT)
+    }
+
     pub fn weights_for(&self, role: &str) -> RoleWeights {
         let mut w = default_weights(role);
         w.comfort.apply(&self.comfort);
@@ -345,8 +371,11 @@ pub fn load_config_strict(path: Option<&Path>) -> Result<Config, String> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SettingsValues {
+    pub picks_shown: usize,
+    pub toggle: String,
     pub min_pick_rate: f64,
     pub comfort_only: bool,
+    pub threat_scaling: bool,
     pub comfort_weight: f64,
     pub lockfile: String,
 }
@@ -356,8 +385,11 @@ impl SettingsValues {
         let c = Config::default();
         let comfort = ComfortConfig::default();
         Self {
+            picks_shown: c.picks_shown,
+            toggle: c.hotkeys.toggle,
             min_pick_rate: c.min_pick_rate,
             comfort_only: c.comfort_only,
+            threat_scaling: c.threat_scaling,
             comfort_weight: comfort.weight,
             lockfile: c.lockfile,
         }
@@ -367,8 +399,11 @@ impl SettingsValues {
         let mut comfort = ComfortConfig::default();
         comfort.apply(&cfg.comfort);
         Self {
+            picks_shown: cfg.picks_shown,
+            toggle: cfg.hotkeys.toggle.clone(),
             min_pick_rate: cfg.min_pick_rate,
             comfort_only: cfg.comfort_only,
+            threat_scaling: cfg.threat_scaling,
             comfort_weight: comfort.weight,
             lockfile: cfg.lockfile.clone(),
         }
@@ -376,6 +411,12 @@ impl SettingsValues {
 
     pub fn validate(&self) -> HashMap<&'static str, String> {
         let mut errs = HashMap::new();
+        if !(1..=15).contains(&self.picks_shown) {
+            errs.insert("picks_shown", "Must be between 1 and 15.".to_string());
+        }
+        if let Err(e) = Hotkey::parse(&self.toggle) {
+            errs.insert("toggle", e);
+        }
         if !(0.0..=5.0).contains(&self.min_pick_rate) || !self.min_pick_rate.is_finite() {
             errs.insert("min_pick_rate", "Must be between 0 and 5.".to_string());
         }
@@ -403,8 +444,10 @@ pub fn save_settings_form(values: &SettingsValues, path: &Path) -> Result<HashMa
         .parse()
         .map_err(|e| format!("parse {}: {e}", path.display()))?;
     let defaults = SettingsValues::defaults();
+    doc["picks_shown"] = toml_edit::value(values.picks_shown as i64);
     doc["min_pick_rate"] = toml_edit::value(values.min_pick_rate);
     doc["comfort_only"] = toml_edit::value(values.comfort_only);
+    doc["threat_scaling"] = toml_edit::value(values.threat_scaling);
     let trimmed_lock = values.lockfile.trim();
     let lock_val: Value = if !trimmed_lock.contains('\'') && !trimmed_lock.contains('\n') {
         Value::from(trimmed_lock)
@@ -420,6 +463,11 @@ pub fn save_settings_form(values: &SettingsValues, path: &Path) -> Result<HashMa
         tbl["weight"] = toml_edit::value(values.comfort_weight);
         doc["comfort"] = Item::Table(tbl);
     }
+
+    if !matches!(doc.get("hotkeys"), Some(Item::Table(_))) {
+        doc["hotkeys"] = Item::Table(Table::new());
+    }
+    doc["hotkeys"]["toggle"] = toml_edit::value(values.toggle.trim());
 
     let tmp = path.with_extension("toml.tmp");
     let rendered = doc.to_string();
@@ -437,6 +485,7 @@ pub fn save_settings_form(values: &SettingsValues, path: &Path) -> Result<HashMa
 pub struct UiSettings {
     pub tier: Option<String>,
     pub window_rect: Option<[i32; 4]>,
+    pub detailed_rows: bool,
 }
 
 pub fn load_ui_settings() -> UiSettings {
@@ -632,8 +681,11 @@ mod tests {
         let path = dir.join("config.toml");
         fs::write(&path, "# keep this comment\nmin_pick_rate = 1.0\nlockfile = 'C:\\old'\n").unwrap();
         let vals = SettingsValues {
+            picks_shown: 3,
+            toggle: "alt+z".into(),
             min_pick_rate: 2.5,
             comfort_only: true,
+            threat_scaling: false,
             comfort_weight: 0.5,
             lockfile: r"D:\Games\lockfile".into(),
         };
@@ -644,8 +696,42 @@ mod tests {
         let loaded = load_config_strict(Some(&path)).unwrap();
         assert_eq!(loaded.min_pick_rate, 2.5);
         assert!(loaded.comfort_only);
+        assert!(!loaded.threat_scaling);
         assert_eq!(loaded.comfort.weight, Some(0.5));
         assert_eq!(loaded.lockfile, r"D:\Games\lockfile");
+        assert_eq!(loaded.picks_shown, 3);
+        assert_eq!(loaded.hotkeys.toggle, "alt+z");
+        assert_eq!(loaded.hotkey().to_string(), "Alt+Z");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn threat_scaling_defaults_to_true() {
+        assert!(Config::default().threat_scaling);
+        assert!(SettingsValues::defaults().threat_scaling);
+        assert!(toml::from_str::<Config>("min_pick_rate = 1.0").unwrap().threat_scaling);
+        assert!(toml::from_str::<Config>(DEFAULT_CONFIG_TOML).unwrap().threat_scaling);
+    }
+
+    #[test]
+    fn missing_picks_shown_and_hotkeys_use_defaults() {
+        let cfg: Config = toml::from_str("min_pick_rate = 1.0").unwrap();
+        assert_eq!(cfg.picks_shown, 5);
+        assert_eq!(cfg.hotkey(), Hotkey::DEFAULT);
+        assert_eq!(toml::from_str::<Config>(DEFAULT_CONFIG_TOML).unwrap().picks_shown, 5);
+    }
+
+    #[test]
+    fn settings_validation_rejects_bad_values() {
+        let ok = SettingsValues::defaults();
+        assert!(ok.validate().is_empty());
+        let mut v = ok.clone();
+        v.picks_shown = 0;
+        assert!(v.validate().contains_key("picks_shown"));
+        v.picks_shown = 16;
+        assert!(v.validate().contains_key("picks_shown"));
+        let mut v = ok.clone();
+        v.toggle = "x".into();
+        assert!(v.validate().contains_key("toggle"));
     }
 }

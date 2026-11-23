@@ -34,6 +34,20 @@ pub struct BuildEvaluation {
     pub build: Option<Build>,
     pub opponents: HashMap<String, i32>,
     pub damage: HashMap<i32, HashMap<String, f64>>,
+    /// Threat multiplier per enemy champion id (empty = 1.0 for everyone).
+    pub threat: HashMap<i32, f64>,
+}
+
+impl BuildEvaluation {
+    /// Clone with matchup weights rescaled by `mult` (enemy champion id -> multiplier).
+    pub fn with_threat(&self, mult: &HashMap<i32, f64>) -> BuildEvaluation {
+        let mut out = self.clone();
+        if let Some(b) = out.build.as_mut() {
+            crate::domain::builds::scale_threat(b, mult);
+        }
+        out.threat = mult.clone();
+        out
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -307,7 +321,7 @@ impl Recommender {
         Ok(Evaluation {
             draft: draft.clone(),
             role,
-            recs: recs.into_iter().take(cfg.top_n).collect(),
+            recs: recs.into_iter().take(cfg.top_n.max(cfg.picks_shown)).collect(),
             lanes,
             enemy_rates: rates,
             blind,
@@ -346,7 +360,7 @@ impl Recommender {
             }
         }
         out.sort_by(|a, b| b.score.total_cmp(&a.score));
-        out.truncate(cfg.top_n);
+        out.truncate(cfg.top_n.max(cfg.picks_shown));
         out
     }
 
@@ -524,13 +538,22 @@ impl Recommender {
         })
     }
 
-    pub async fn build(&self, champion_id: i32, role: &str, enemies: &HashMap<String, i32>) -> BuildEvaluation {
+    pub async fn build(
+        &self,
+        champion_id: i32,
+        role: &str,
+        enemies: &HashMap<String, i32>,
+        extra: &HashMap<String, f64>,
+    ) -> BuildEvaluation {
         let (cfg, lola) = (self.cfg.read().unwrap().clone(), self.lola.read().unwrap().clone());
         let slug = self.champs.slug(champion_id);
         let raw_base = lola.build_full(&slug, role).await;
         let mut base = builds::parse_build(&raw_base);
 
-        let weights = cfg.build_weights_for(role);
+        let mut weights = cfg.build_weights_for(role);
+        for (lane, &w) in extra {
+            weights.entry(lane.clone()).or_insert(w);
+        }
         let opponents: HashMap<String, i32> = enemies
             .iter()
             .filter(|(l, _)| weights.contains_key(l.as_str()))
@@ -574,6 +597,7 @@ impl Recommender {
             build: base,
             opponents,
             damage,
+            threat: HashMap::new(),
         }
     }
 
