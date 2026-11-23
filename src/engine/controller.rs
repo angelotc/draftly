@@ -428,6 +428,29 @@ impl Controller {
                                 .collect();
                             let scaled = bev.with_threat(&mult);
                             build = Some(ingame_build_view(g, Some(&scaled), &rec.champs, &rec.assets));
+                            if std::env::var_os("DRAFTLY_DUMP_BUILD").is_some()
+                                && let Some(b) = &build
+                            {
+                                for sec in &b.sections {
+                                    eprintln!("[{}] {}", sec.title, sec.state);
+                                    for o in &sec.options {
+                                        let names: Vec<&str> = o.parts.iter().map(|p| p.name.as_str()).collect();
+                                        let vs: Vec<String> = o
+                                            .vs
+                                            .iter()
+                                            .map(|v| format!("{} {:+.2}", v.champ.name, v.weighted))
+                                            .collect();
+                                        eprintln!(
+                                            "  {:<28} wr {:.1} games {} matchup {:+.2} | {}",
+                                            names.join("+"),
+                                            o.wr,
+                                            o.games,
+                                            o.matchup,
+                                            vs.join(", ")
+                                        );
+                                    }
+                                }
+                            }
                         } else {
                             build_note = "Loading build...".to_string();
                             kind = "waiting".to_string();

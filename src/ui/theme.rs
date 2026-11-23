@@ -80,7 +80,11 @@ pub fn apply_theme(ctx: &egui::Context) {
     v.selection.stroke = Stroke::new(1.0, ACCENT);
     v.window_corner_radius = CornerRadius::same(6);
     style.visuals = v;
-    ctx.set_style(style);
+    // Draftly is dark-only. Without this, egui follows the Windows app theme and people on light
+    // mode get egui's default light style (white Settings window with unreadable light text).
+    ctx.set_theme(egui::ThemePreference::Dark);
+    ctx.set_style_of(egui::Theme::Dark, style.clone());
+    ctx.set_style_of(egui::Theme::Light, style);
 }
 
 pub fn short_lane(l: &str) -> &'static str {

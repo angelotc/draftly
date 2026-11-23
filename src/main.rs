@@ -72,9 +72,12 @@ struct Cli {
     level: i32,
     #[arg(long, default_value_t = 650.0)]
     gold: f64,
-    /// Simulate this enemy as far ahead (higher level, more items) to preview the Fed tag.
-    #[arg(long)]
-    fed: Option<String>,
+    /// Simulate these enemies (comma separated) as far ahead (higher level, more items) to preview the Fed tag.
+    #[arg(long, default_value = "")]
+    fed: String,
+    /// Simulate these enemies as behind (lower level, fewer items) to preview the Behind tag.
+    #[arg(long, default_value = "")]
+    behind: String,
     #[arg(long)]
     screenshot: Option<PathBuf>,
     /// Capture the Settings window instead of the main panel.
@@ -370,8 +373,6 @@ impl eframe::App for CompanionApp {
         }
 
         // In-game frameless overlay (always registered as a deferred viewport so it can be shown/hidden without touching ROOT)
-        let game_shown = self.shared.game_shown.load(Ordering::Relaxed);
-        let has_game_data = self.shared.latest_game.lock().unwrap().is_some();
         let place = self
             .shared
             .last_game_place
@@ -390,7 +391,10 @@ impl eframe::App for CompanionApp {
             .with_always_on_top()
             .with_resizable(false)
             .with_taskbar(false)
-            .with_visible(game_shown && has_game_data)
+            // Never shown or activated through egui: that path takes focus, which minimizes a
+            // full-screen game. The watcher thread shows it with SW_SHOWNA instead.
+            .with_visible(false)
+            .with_active(false)
             .with_inner_size([place.width as f32 / dpi, place.height as f32 / dpi])
             .with_position([place.x as f32 / dpi, place.y as f32 / dpi]);
         let shared_ig = Arc::clone(&self.shared);
@@ -564,7 +568,7 @@ fn spawn_tracker_and_tray(
                     (Some(place), true)
                 } else {
                     let game = win32::find_game();
-                    if game == 0 || win32::is_minimized(game) {
+                    if game == 0 || win32::is_minimized(game) || win32::exclusive_fullscreen() {
                         (None, false)
                     } else {
                         let front = win32::foreground_root();
@@ -750,7 +754,8 @@ async fn run_simulate(ctl: Arc<Controller>, cli: Cli) {
         for (lane, cid) in LANES.iter().rev().zip(enemies.iter()) {
             enemy_map.insert((*lane).to_string(), rec.champs.name(*cid));
         }
-        let fed_id = cli.fed.as_deref().and_then(|n| rec.champs.id_from_slug(n));
+        let fed_ids = parse_ids(&cli.fed);
+        let behind_ids = parse_ids(&cli.behind);
         let mut players = vec![LivePlayer {
             enemy: false,
             lane: role.clone(),
@@ -760,14 +765,17 @@ async fn run_simulate(ctl: Arc<Controller>, cli: Cli) {
             ..Default::default()
         }];
         for (lane, cid) in LANES.iter().rev().zip(enemies.iter()) {
-            let fed = fed_id == Some(*cid);
+            let fed = fed_ids.contains(cid);
+            let behind = behind_ids.contains(cid);
             players.push(LivePlayer {
                 enemy: true,
                 lane: (*lane).to_string(),
                 champion: rec.champs.name(*cid),
-                level: if fed { 13 } else { 9 },
+                level: if fed { 13 } else if behind { 7 } else { 9 },
                 items: if fed {
                     vec![3089, 3157, 3135, 3020]
+                } else if behind {
+                    vec![3071]
                 } else {
                     vec![3071, 3053]
                 },

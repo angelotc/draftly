@@ -371,6 +371,19 @@ fn render_ig_build(ui: &mut Ui, s: &IngameBuildView, imgs: &mut ImageCache) {
         render_damage_bar(ui, dmg);
     }
 
+    // Threat tags get their own line (reserved even when empty) so the build table never shifts
+    // or gets pushed off the panel.
+    ui.allocate_ui_with_layout(
+        Vec2::new(ui.available_width(), 12.0),
+        Layout::left_to_right(Align::Center).with_main_wrap(true),
+        |ui| {
+            ui.set_min_height(12.0);
+            for (e, _, m) in &s.opponents {
+                threat_tag(ui, &e.name, *m);
+            }
+        },
+    );
+
     if let Some(empty) = &s.empty {
         ui.add_space(6.0);
         ui.label(RichText::new(empty).size(10.5).color(DIM));
@@ -419,7 +432,7 @@ fn render_ig_build(ui: &mut Ui, s: &IngameBuildView, imgs: &mut ImageCache) {
     }
 
     let opp_cols: Vec<_> = s.opponents.iter().take(4).collect();
-    for (sec_idx, sec) in s.sections.iter().enumerate() {
+    for sec in &s.sections {
         ui.add_space(4.0);
         let is_next = sec.state == "next";
         let bg = if is_next {
@@ -451,12 +464,6 @@ fn render_ig_build(ui: &mut Ui, s: &IngameBuildView, imgs: &mut ImageCache) {
                             .size(10.0)
                             .color(if is_next { CORAL } else { MUTED }),
                     );
-                    // Threat tags sit in the free space of the first header row, so nothing shifts.
-                    if sec_idx == 0 {
-                        for (e, _, m) in &s.opponents {
-                            threat_tag(ui, &e.name, *m);
-                        }
-                    }
                     if !opp_cols.is_empty() && sec.options.iter().any(|o| !o.vs.is_empty()) {
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             ui.allocate_space(Vec2::new(total_w, 16.0));

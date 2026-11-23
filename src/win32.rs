@@ -11,6 +11,7 @@ mod imp {
     use windows_sys::Win32::UI::HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForMonitor, MDT_EFFECTIVE_DPI, SetProcessDpiAwarenessContext};
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState};
     use crate::domain::hotkey::Hotkey;
+    use windows_sys::Win32::UI::Shell::{QUNS_RUNNING_D3D_FULL_SCREEN, SHQueryUserNotificationState};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CallWindowProcW, DefWindowProcW, EnumWindows, FindWindowExW, FindWindowW, GA_ROOTOWNER,
         GWL_EXSTYLE, GWLP_WNDPROC, GetAncestor, GetClassNameW, GetClientRect, GetForegroundWindow,
@@ -164,6 +165,15 @@ mod imp {
             let mut st = State { found: 0 };
             EnumWindows(Some(enum_cb), &mut st as *mut State as LPARAM);
             st.found
+        }
+    }
+
+    /// True while an exclusive full-screen Direct3D app (League in "Full Screen" mode) owns the
+    /// display. Showing any window then would minimize the game, and it could not be seen anyway.
+    pub fn exclusive_fullscreen() -> bool {
+        unsafe {
+            let mut state = 0;
+            SHQueryUserNotificationState(&mut state) == 0 && state == QUNS_RUNNING_D3D_FULL_SCREEN
         }
     }
 
@@ -602,6 +612,7 @@ mod imp {
     pub fn find_window_by_title(_: &str) -> isize { 0 }
     pub fn find_game() -> isize { 0 }
     pub fn foreground_root() -> isize { 0 }
+    pub fn exclusive_fullscreen() -> bool { false }
     pub fn is_minimized(_: isize) -> bool { false }
     pub fn is_normal(_: isize) -> bool { false }
     pub fn window_rect(_: isize) -> Rect { Rect { left: 0, top: 0, right: 1280, bottom: 720 } }
