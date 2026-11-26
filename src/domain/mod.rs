@@ -7,6 +7,7 @@ pub mod hotkey;
 pub mod lcu;
 pub mod live;
 pub mod players;
+pub mod review;
 pub mod scoring;
 pub mod state;
 pub mod threat;

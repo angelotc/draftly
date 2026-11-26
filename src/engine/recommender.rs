@@ -233,8 +233,33 @@ impl Recommender {
         enemy_lanes: Option<&HashMap<i32, String>>,
         comfort: &HashMap<i32, Comfort>,
     ) -> Result<Evaluation, String> {
+        self.evaluate_inner(draft, pickable, enemy_lanes, comfort, None, false).await
+    }
+
+    /// Like `evaluate`, but keeps every ranked candidate (no top-N cut) and can score at a
+    /// specific tier. Used to review a past pick against the whole field.
+    pub async fn evaluate_full(
+        &self,
+        draft: &DraftState,
+        pickable: Option<&HashSet<i32>>,
+        enemy_lanes: Option<&HashMap<i32, String>>,
+        comfort: &HashMap<i32, Comfort>,
+        tier: Option<&str>,
+    ) -> Result<Evaluation, String> {
+        self.evaluate_inner(draft, pickable, enemy_lanes, comfort, tier, true).await
+    }
+
+    async fn evaluate_inner(
+        &self,
+        draft: &DraftState,
+        pickable: Option<&HashSet<i32>>,
+        enemy_lanes: Option<&HashMap<i32, String>>,
+        comfort: &HashMap<i32, Comfort>,
+        tier: Option<&str>,
+        full: bool,
+    ) -> Result<Evaluation, String> {
         let role = Self::role_for(draft).ok_or_else(|| "no assigned role".to_string())?;
-        let pool = self.pool(&role, None, |_| {}).await;
+        let pool = self.pool(&role, tier, |_| {}).await;
         let cfg = self.cfg.read().unwrap().clone();
 
         let hovers: HashSet<i32> = draft
@@ -315,13 +340,17 @@ impl Recommender {
         if !enemies.contains_key(&role) {
             let mut blind_taken = taken.clone();
             blind_taken.extend(&draft.enemies);
-            blind = self.blind(&role, &candidates, &recs, &blind_taken).await;
+            let limit = (!full).then(|| cfg.top_n.max(cfg.picks_shown));
+            blind = self.blind(&role, &candidates, &recs, &blind_taken, tier, limit).await;
         }
 
         Ok(Evaluation {
             draft: draft.clone(),
             role,
-            recs: recs.into_iter().take(cfg.top_n.max(cfg.picks_shown)).collect(),
+            recs: recs
+                .into_iter()
+                .take(if full { usize::MAX } else { cfg.top_n.max(cfg.picks_shown) })
+                .collect(),
             lanes,
             enemy_rates: rates,
             blind,
@@ -334,8 +363,17 @@ impl Recommender {
         candidates: &[&ChampStats],
         recs: &[Recommendation],
         taken: &HashSet<i32>,
+        tier: Option<&str>,
+        limit: Option<usize>,
     ) -> Vec<Blind> {
-        let (cfg, lola) = (self.cfg.read().unwrap().clone(), self.lola.read().unwrap().clone());
+        let cfg = self.cfg.read().unwrap().clone();
+        let lola = {
+            let l = self.lola.read().unwrap();
+            match tier {
+                Some(t) if t != l.tier => l.at_tier(t),
+                _ => l.clone(),
+            }
+        };
         let rows = lola.tier_list(role, None).await;
         let opponents: HashMap<i32, f64> = rows
             .into_iter()
@@ -350,17 +388,23 @@ impl Recommender {
         let mut out = rank_blind(&items, role, &opponents, cfg.k, &cfg.blind);
         for b in &mut out {
             if let Some(r) = by_id.get(&b.champion_id) {
-                b.synergy = r
-                    .contributions
-                    .iter()
-                    .filter(|c| c.label == "with")
-                    .map(|c| c.weighted)
-                    .sum();
-                b.score += b.synergy;
+                let sum_of = |labels: &[&str]| -> f64 {
+                    r.contributions
+                        .iter()
+                        .filter(|c| labels.contains(&c.label.as_str()))
+                        .map(|c| c.weighted)
+                        .sum()
+                };
+                b.synergy = sum_of(&["with"]);
+                // Same personal bonus (record + mastery, already capped) the best-matchup ranking uses.
+                b.comfort = sum_of(&["you", "mastery"]);
+                b.score += b.synergy + b.comfort;
             }
         }
         out.sort_by(|a, b| b.score.total_cmp(&a.score));
-        out.truncate(cfg.top_n.max(cfg.picks_shown));
+        if let Some(n) = limit {
+            out.truncate(n);
+        }
         out
     }
 

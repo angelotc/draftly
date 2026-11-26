@@ -12,6 +12,7 @@ use crate::ui::bans_view::render_bans;
 use crate::ui::build_view::{BuildUiState, render_build};
 use crate::ui::explore_view::{ExploreUiState, render_explore};
 use crate::ui::picks_view::{PicksUiState, render_best_picks, render_blind_picks};
+use crate::ui::review_view::{IdleView, ReviewUiState, idle_toggle, render_review};
 use crate::ui::theme::{ACCENT, AD, ALLY, ALLY_TEXT, AP, BG, BG2, CORAL, DIM, ENEMY, ENEMY_TEXT, LINE2, MUTED, NEG, PANEL, POS, RAISED, TEXT, fmt_signed, short_lane, strong};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +38,8 @@ pub struct ClientUiState {
     pub picks: PicksUiState,
     pub build: BuildUiState,
     pub explore: ExploreUiState,
+    pub idle_view: IdleView,
+    pub review: ReviewUiState,
 }
 
 impl Default for ClientUiState {
@@ -51,6 +54,8 @@ impl Default for ClientUiState {
             picks: PicksUiState::new(load_ui_settings().detailed_rows),
             build: BuildUiState::default(),
             explore: ExploreUiState::default(),
+            idle_view: IdleView::default(),
+            review: ReviewUiState::default(),
         }
     }
 }
@@ -377,7 +382,25 @@ pub fn render_client(
                         }
                     }
                 } else if s.explore {
-                    render_explore(ui, ctl, &s.header.tier_id, &mut st.explore, imgs);
+                    ui.horizontal(|ui| {
+                        if idle_toggle(ui, &mut st.idle_view) && st.idle_view == IdleView::Review {
+                            st.review.activate(ctl, ui.ctx());
+                        }
+                        if st.idle_view == IdleView::Review && st.review.backfilling && st.review.list.is_some() {
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                ui.label(
+                                    RichText::new("Rebuilding older drafts from saved snapshots...")
+                                        .size(11.0)
+                                        .color(MUTED),
+                                );
+                            });
+                        }
+                    });
+                    ui.add_space(6.0);
+                    match st.idle_view {
+                        IdleView::Blind => render_explore(ui, ctl, &s.header.tier_id, &mut st.explore, imgs),
+                        IdleView::Review => render_review(ui, ctl, &mut st.review, imgs),
+                    }
                 }
             });
         });

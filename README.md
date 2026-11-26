@@ -124,7 +124,7 @@ app stores settings and advanced options in `%LOCALAPPDATA%\league-analysis\conf
 | `min_pick_rate` | 1.0 | Minimum candidate pick rate (%). Lower it for off-meta picks. |
 | `comfort_only` | false | Only recommend champions you've played. |
 | `threat_scaling` | true | In game, weight enemies who are ahead more in the build and ones who are behind less. |
-| `[comfort]` | | `weight` (0 = off), `k`, `history`, `half_life`, `min_games`, `mastery`, `mastery_cap` |
+| `[comfort]` | | `weight` (0 = off), `k`, `history`, `half_life`, `min_games`, `mastery`, `mastery_cap`, `cap` (1.5: most your record and mastery can add or remove in total) |
 | `[weights.<role>]` | | Per-role lane weights. |
 | `[build_weights.<role>]` | | Which enemies build Δs are measured against, and their weights. |
 | `build_min_games` | 20 | Ignore an enemy's Δ for an option below this many games. |
@@ -144,6 +144,8 @@ vs      = shrink(Δ(c vs enemy in lane L), games, k)             × w_enemy[L]  
 with    = shrink(Δ(c with ally in lane L), games, k)            × w_ally[L]    each ally (× 0.5 if hovered)
 you     = shrink(your_wr(c) − wr(c), your_games(c), 40) × 0.5   × w_comfort   (3+ games)
 mastery = min(0.15 × ln(1 + points / 1000), 1.0)                × w_comfort
+
+you + mastery together are clamped to ±cap (1.5); if they exceed it both are scaled down equally
 
 shrink(δ, n, k) = δ × n / (n + k)     k = 500: a 500-game sample counts half
 your games are weighted 0.5^(age / half_life), half_life = 90 days

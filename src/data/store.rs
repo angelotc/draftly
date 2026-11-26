@@ -12,6 +12,7 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::domain::config::data_dir;
+use crate::domain::review::ReviewRecord;
 
 pub const DRAFT_GAME_WINDOW: f64 = 15.0 * 60.0;
 
@@ -69,6 +70,39 @@ pub fn unpack_json(blob: &[u8]) -> Option<Value> {
     let mut out = Vec::new();
     dec.read_to_end(&mut out).ok()?;
     serde_json::from_slice(&out).ok()
+}
+
+/// One recorded draft in which the player picked a champion.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DraftRow {
+    pub id: i64,
+    pub started: f64,
+    pub role: Option<String>,
+    pub tier: Option<String>,
+    pub my_champ: i32,
+    pub result: Option<String>,
+    pub game_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoredReview {
+    pub draft: DraftRow,
+    /// Latest "review" record saved for the draft, if any.
+    pub review: Option<ReviewRecord>,
+}
+
+const DRAFT_COLS: &str = "id, started, role, tier, my_champ, result, game_id";
+
+fn draft_row(r: &rusqlite::Row) -> rusqlite::Result<DraftRow> {
+    Ok(DraftRow {
+        id: r.get(0)?,
+        started: r.get(1)?,
+        role: r.get(2)?,
+        tier: r.get(3)?,
+        my_champ: r.get(4)?,
+        result: r.get(5)?,
+        game_id: r.get(6)?,
+    })
 }
 
 pub struct Store {
@@ -221,6 +255,64 @@ impl Store {
         Ok(())
     }
 
+    /// Most recent drafts (newest first) that have a picked champion, each with its latest review.
+    pub fn recent_reviews(&self, limit: usize) -> Vec<StoredReview> {
+        let db = self.db.lock().unwrap();
+        let Ok(mut stmt) = db.prepare(&format!(
+            "SELECT {DRAFT_COLS} FROM drafts WHERE my_champ IS NOT NULL AND my_champ != 0              ORDER BY started DESC, id DESC LIMIT ?"
+        )) else {
+            return Vec::new();
+        };
+        let Ok(rows) = stmt.query_map(params![limit as i64], draft_row) else {
+            return Vec::new();
+        };
+        let drafts: Vec<DraftRow> = rows.filter_map(|r| r.ok()).collect();
+        drafts
+            .into_iter()
+            .map(|draft| {
+                let payload: Option<String> = db
+                    .query_row(
+                        "SELECT payload FROM recommendations WHERE draft_id=? AND kind='review'                          ORDER BY t DESC, rowid DESC LIMIT 1",
+                        params![draft.id],
+                        |r| r.get(0),
+                    )
+                    .optional()
+                    .ok()
+                    .flatten();
+                let review = payload.and_then(|p| serde_json::from_str(&p).ok());
+                StoredReview { draft, review }
+            })
+            .collect()
+    }
+
+    /// Among the `recent` newest drafts with a picked champion, those with no "review" row yet.
+    pub fn drafts_lacking_review(&self, recent: usize) -> Vec<DraftRow> {
+        let db = self.db.lock().unwrap();
+        let Ok(mut stmt) = db.prepare(&format!(
+            "SELECT {DRAFT_COLS} FROM (SELECT {DRAFT_COLS} FROM drafts              WHERE my_champ IS NOT NULL AND my_champ != 0 ORDER BY started DESC, id DESC LIMIT ?)              WHERE id NOT IN (SELECT draft_id FROM recommendations WHERE kind='review')              ORDER BY started DESC, id DESC"
+        )) else {
+            return Vec::new();
+        };
+        let Ok(rows) = stmt.query_map(params![recent as i64], draft_row) else {
+            return Vec::new();
+        };
+        rows.filter_map(|r| r.ok()).collect()
+    }
+
+    /// Raw LCU sessions saved for a draft, oldest first.
+    pub fn snapshots(&self, draft_id: i64) -> Vec<Value> {
+        let db = self.db.lock().unwrap();
+        let Ok(mut stmt) =
+            db.prepare("SELECT session FROM snapshots WHERE draft_id=? ORDER BY t, rowid")
+        else {
+            return Vec::new();
+        };
+        let Ok(rows) = stmt.query_map(params![draft_id], |r| r.get::<_, Vec<u8>>(0)) else {
+            return Vec::new();
+        };
+        rows.filter_map(|r| r.ok()).filter_map(|b| unpack_json(&b)).collect()
+    }
+
     pub fn top_roles(&self, limit: usize) -> Vec<String> {
         let db = self.db.lock().unwrap();
         let Ok(mut stmt) = db.prepare(
@@ -311,6 +403,76 @@ mod tests {
         let rec = store.champ_record(Some("support"), 90.0);
         assert_eq!(rec[&412].0, 1);
         assert_eq!(rec[&412].1, 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn review(champ: i32, total: usize) -> ReviewRecord {
+        ReviewRecord {
+            version: 1,
+            source: "live".into(),
+            role: "support".into(),
+            tier: "master_plus".into(),
+            my_champ: champ,
+            mode: "blind".into(),
+            allies: vec![],
+            enemies: vec![],
+            bans: vec![],
+            options: vec![],
+            total,
+            picked_rank: Some(1),
+        }
+    }
+
+    #[test]
+    fn test_recent_reviews_order_and_joins() {
+        let dir = std::env::temp_dir().join("draftly_test_store_reviews");
+        let _ = fs::remove_dir_all(&dir);
+        let store = Store::open(dir.join("s.sqlite")).unwrap();
+
+        let a = store.start_draft(Some("support"), "master_plus").unwrap();
+        store.update_draft(a, Some(1000.0), Some(412), Some("support")).unwrap();
+        store.save_recs(a, "review", &serde_json::to_value(review(412, 10)).unwrap()).unwrap();
+        store.save_recs(a, "review", &serde_json::to_value(review(412, 20)).unwrap()).unwrap();
+        store.add_game(99, 1050.0, 420, 412, "support", false, 1800, &json!({})).unwrap();
+        store.link_draft(99, 412, 1050.0, false).unwrap();
+
+        let b = store.start_draft(Some("middle"), "master_plus").unwrap();
+        store.update_draft(b, None, Some(103), Some("middle")).unwrap();
+        store.save_recs(b, "locked", &json!({"role": "middle"})).unwrap();
+
+        // never locked in: not listed
+        let c = store.start_draft(Some("top"), "master_plus").unwrap();
+
+        let all = store.recent_reviews(10);
+        let ids: Vec<i64> = all.iter().map(|r| r.draft.id).collect();
+        assert_eq!(ids, vec![b, a]);
+        assert!(!ids.contains(&c));
+        assert!(all[0].review.is_none());
+        assert_eq!(all[0].draft.result, None);
+        let first = &all[1];
+        assert_eq!(first.draft.result.as_deref(), Some("loss"));
+        assert_eq!(first.draft.game_id, Some(99));
+        assert_eq!(first.draft.my_champ, 412);
+        assert_eq!(first.review.as_ref().unwrap().total, 20, "latest review row wins");
+        assert_eq!(store.recent_reviews(1).len(), 1);
+
+        let lacking: Vec<i64> = store.drafts_lacking_review(10).iter().map(|d| d.id).collect();
+        assert_eq!(lacking, vec![b]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_snapshots_come_back_in_order() {
+        let dir = std::env::temp_dir().join("draftly_test_store_snaps");
+        let _ = fs::remove_dir_all(&dir);
+        let store = Store::open(dir.join("s.sqlite")).unwrap();
+        let d = store.start_draft(Some("support"), "master_plus").unwrap();
+        for n in 0..3 {
+            store.snapshot(d, &json!({"n": n})).unwrap();
+        }
+        let snaps = store.snapshots(d);
+        let ns: Vec<i64> = snaps.iter().map(|s| s["n"].as_i64().unwrap()).collect();
+        assert_eq!(ns, vec![0, 1, 2]);
         let _ = fs::remove_dir_all(&dir);
     }
 }

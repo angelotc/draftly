@@ -32,6 +32,7 @@ use crate::engine::views::GameScreen;
 use images::ImageCache;
 use tray::{TrayAction, TrayHandle, TrayIds};
 use ui::client_view::{ClientUiState, render_client};
+use ui::review_view::IdleView;
 use ui::game_view::render_game_overlay;
 use ui::settings_view::{SettingsUiState, render_settings};
 use ui::theme::apply_theme;
@@ -83,6 +84,22 @@ struct Cli {
     /// Capture the Settings window instead of the main panel.
     #[arg(long, requires = "screenshot")]
     screenshot_settings: bool,
+    /// Open this SQLite store instead of the default one (try the app against a copy of your data).
+    #[arg(long)]
+    store: Option<PathBuf>,
+    /// Which screen the idle panel starts on.
+    #[arg(long, value_enum)]
+    view: Option<ViewArg>,
+    /// Show the idle panel without connecting to the League client or taking over the running app
+    /// (for screenshots and trying the UI; combine with --store and --view review).
+    #[arg(long)]
+    idle: bool,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum ViewArg {
+    Blind,
+    Review,
 }
 
 enum AppSignal {
@@ -363,7 +380,11 @@ impl eframe::App for CompanionApp {
                     if (c.bans.is_some()
                         || c.picks.is_some()
                         || c.build.is_some()
-                        || (c.explore && self.client_ui.explore.report.is_some()))
+                        || (c.explore
+                            && match self.client_ui.idle_view {
+                                IdleView::Blind => self.client_ui.explore.report.is_some(),
+                                IdleView::Review => self.client_ui.review.settled(),
+                            }))
                         && (c.stage != crate::domain::state::Stage::Locked || c.build.is_some())
             );
             if !self.shared.screenshot_settings {
@@ -838,7 +859,7 @@ fn main() {
         .init();
 
     win32::make_dpi_aware();
-    let always_show = cli.replay.is_some() || cli.simulate;
+    let always_show = cli.replay.is_some() || cli.simulate || cli.idle;
     let live = !always_show;
     if live && !win32::claim_single_instance() {
         info!("already running: showed the other copy's panel");
@@ -853,7 +874,15 @@ fn main() {
 
     let cfg_path = cli.config.clone().unwrap_or_else(default_config_path);
     let cfg: Config = load_config(Some(&cfg_path));
-    let store = if live {
+    let store = if let Some(path) = &cli.store {
+        match Store::open(path) {
+            Ok(s) => Some(Arc::new(s)),
+            Err(e) => {
+                eprintln!("could not open store {}: {e}", path.display());
+                std::process::exit(2);
+            }
+        }
+    } else if live {
         Store::open_default().ok().map(Arc::new)
     } else {
         None
@@ -958,6 +987,9 @@ fn main() {
             run_simulate(ctl_boot, cli_boot).await;
         } else if let Some(rep) = cli_boot.replay {
             run_replay(ctl_boot, rep, cli_boot.delay).await;
+        } else if cli_boot.idle {
+            // No League client: just show the idle panel.
+            ctl_boot.render(Arc::clone(&ctl_boot)).await;
         } else {
             run_live(ctl_boot, cli_boot.record).await;
         }
@@ -984,7 +1016,13 @@ fn main() {
         ..Default::default()
     };
 
-    let app = CompanionApp::new(shared, screen_rx, sig_rx);
+    let mut app = CompanionApp::new(shared, screen_rx, sig_rx);
+    if let Some(v) = cli.view {
+        app.client_ui.idle_view = match v {
+            ViewArg::Blind => IdleView::Blind,
+            ViewArg::Review => IdleView::Review,
+        };
+    }
     if let Err(e) = eframe::run_native(PANEL_TITLE, native_options, Box::new(|cc| {
         apply_theme(&cc.egui_ctx);
         Ok(Box::new(app))
