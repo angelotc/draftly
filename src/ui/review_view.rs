@@ -176,16 +176,22 @@ fn result_text(g: &ReviewGameView) -> (&'static str, Color32) {
 }
 
 /// Heat-coloured pill with a signed value, painted inline.
+/// Fixed-size score pill, so every badge in a column (and across views) has the same
+/// width and height regardless of the digits or the surrounding layout.
+const BADGE_SIZE: Vec2 = Vec2::new(42.0, 18.0);
+
 fn score_badge(ui: &mut Ui, v: f64) -> egui::Response {
     let (bg, fg) = heat_bg(v, HEAT_MAX);
-    egui::Frame::new()
-        .fill(bg)
-        .corner_radius(CornerRadius::same(4))
-        .inner_margin(Margin::symmetric(6, 1))
-        .show(ui, |ui| {
-            ui.label(strong(fmt_signed(v, 1)).size(12.0).color(fg));
-        })
-        .response
+    let galley = ui.painter().layout_no_wrap(fmt_signed(v, 1), strong_font(12.0), fg);
+    // Grow only if the text truly cannot fit (e.g. "+12.5"), never shrink.
+    let size = Vec2::new(BADGE_SIZE.x.max(galley.size().x + 10.0), BADGE_SIZE.y);
+    let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::hover());
+    if ui.is_rect_visible(rect) {
+        let p = ui.painter();
+        p.rect_filled(rect, CornerRadius::same(4), bg);
+        p.galley(rect.center() - galley.size() / 2.0, galley, fg);
+    }
+    resp
 }
 
 fn chip(ui: &mut Ui, text: &str, color: Color32) {
