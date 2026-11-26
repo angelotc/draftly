@@ -89,6 +89,8 @@ pub struct ComfortConfig {
     pub history: f64,
     pub mastery: f64,
     pub mastery_cap: f64,
+    /// Cap on the total personal bonus (history + mastery), applied symmetrically.
+    pub cap: f64,
     pub half_life: f64,
     pub min_games: u32,
 }
@@ -101,6 +103,7 @@ impl Default for ComfortConfig {
             history: 0.5,
             mastery: 0.15,
             mastery_cap: 1.0,
+            cap: 1.5,
             half_life: 90.0,
             min_games: 3,
         }
@@ -115,6 +118,7 @@ pub struct ComfortOverride {
     pub history: Option<f64>,
     pub mastery: Option<f64>,
     pub mastery_cap: Option<f64>,
+    pub cap: Option<f64>,
     pub half_life: Option<f64>,
     pub min_games: Option<u32>,
 }
@@ -135,6 +139,9 @@ impl ComfortConfig {
         }
         if let Some(v) = ov.mastery_cap {
             self.mastery_cap = v;
+        }
+        if let Some(v) = ov.cap {
+            self.cap = v;
         }
         if let Some(v) = ov.half_life {
             self.half_life = v;

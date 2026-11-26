@@ -6,8 +6,10 @@ use crate::domain::champions::Champions;
 use crate::domain::ddragon::{Assets, SHARD_ROWS};
 use crate::domain::live::LiveGame;
 use crate::domain::players::PlayerStats;
+use crate::domain::review::{MODE_BLIND, ReviewOption, ReviewRecord};
 use crate::domain::scoring::{DraftOdds, LANES};
 use crate::domain::state::Stage;
+use crate::data::store::StoredReview;
 
 use super::recommender::{BanEvaluation, BuildEvaluation, Evaluation};
 
@@ -1457,6 +1459,292 @@ pub fn explore_report_view(
     }
 }
 
+/// Rows of the options table shown for one reviewed game.
+pub const REVIEW_TABLE_ROWS: usize = 8;
+
+#[derive(Debug, Clone)]
+pub struct ReviewOptionView {
+    pub champ: ChampRef,
+    pub rank: usize,
+    pub score: f64,
+    pub comfort: f64,
+    pub anyone: f64,
+    pub games: Option<u32>,
+    pub wins: Option<u32>,
+    pub mastery: Option<u64>,
+    pub is_picked: bool,
+    pub is_best_you: bool,
+    pub is_best_anyone: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReviewAllyView {
+    pub champ: ChampRef,
+    pub position: String,
+    pub locked: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReviewEnemyView {
+    pub champ: ChampRef,
+    pub lane: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReviewBoardView {
+    pub blind: bool,
+    pub allies: Vec<ReviewAllyView>,
+    pub enemies: Vec<ReviewEnemyView>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReviewGameView {
+    pub draft_id: i64,
+    pub date: String,
+    pub role: String,
+    pub champ: ChampRef,
+    /// Some(true) = win, Some(false) = loss, None = no result yet.
+    pub result: Option<bool>,
+    /// Rebuilt from saved snapshots with today's statistics instead of recorded at lock-in.
+    pub replayed: bool,
+    /// None when no board was saved for this draft.
+    pub board: Option<ReviewBoardView>,
+    pub picked: Option<ReviewOptionView>,
+    pub best_you: Option<ReviewOptionView>,
+    pub best_anyone: Option<ReviewOptionView>,
+    /// Table rows, best first: the top of the ranking plus the pick and the best for anyone.
+    pub rows: Vec<ReviewOptionView>,
+    /// Score the pick left on the table compared with the best for you (never negative).
+    pub left: Option<f64>,
+    pub took_best: bool,
+    pub verdict: String,
+    pub total: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ReviewSummaryView {
+    /// Games whose pick could be scored.
+    pub scored: usize,
+    pub best_taken: usize,
+    pub avg_left: f64,
+    pub wins: usize,
+    pub losses: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReviewListView {
+    pub games: Vec<ReviewGameView>,
+    pub summary: ReviewSummaryView,
+    /// Configured cap on the personal bonus included in "for you".
+    pub cap: f64,
+}
+
+/// Anything closer than this to the best score counts as taking the best pick (it displays as 0.0).
+const LEFT_EPS: f64 = 0.05;
+
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    (y, m, d)
+}
+
+/// "Mar 4" for a unix time shifted by `offset_secs` (local time zone).
+pub fn date_label(secs: f64, offset_secs: i64) -> String {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let local = secs as i64 + offset_secs;
+    let (_, m, d) = civil_from_days(local.div_euclid(86_400));
+    format!("{} {d}", MONTHS[(m - 1) as usize])
+}
+
+#[cfg(windows)]
+pub fn local_offset_secs() -> i64 {
+    use windows_sys::Win32::System::Time::{GetTimeZoneInformation, TIME_ZONE_INFORMATION};
+    // SAFETY: the struct is plain data and is only written by the call.
+    unsafe {
+        let mut tz: TIME_ZONE_INFORMATION = std::mem::zeroed();
+        let kind = GetTimeZoneInformation(&mut tz);
+        let bias = tz.Bias + if kind == 2 { tz.DaylightBias } else { tz.StandardBias };
+        -i64::from(bias) * 60
+    }
+}
+
+#[cfg(not(windows))]
+pub fn local_offset_secs() -> i64 {
+    0
+}
+
+fn review_option_view(o: &ReviewOption, champs: &Champions) -> ReviewOptionView {
+    ReviewOptionView {
+        champ: ChampRef::from_id(o.champion_id, champs),
+        rank: o.rank,
+        score: o.score,
+        comfort: o.comfort,
+        anyone: o.anyone,
+        games: o.games,
+        wins: o.wins,
+        mastery: o.mastery,
+        is_picked: false,
+        is_best_you: false,
+        is_best_anyone: false,
+    }
+}
+
+fn review_board_view(rec: &ReviewRecord, champs: &Champions) -> ReviewBoardView {
+    ReviewBoardView {
+        blind: rec.mode == MODE_BLIND,
+        allies: rec
+            .allies
+            .iter()
+            .map(|a| ReviewAllyView {
+                champ: ChampRef::from_id(a.champion_id, champs),
+                position: a.position.clone(),
+                locked: a.locked,
+            })
+            .collect(),
+        enemies: rec
+            .enemies
+            .iter()
+            .map(|e| ReviewEnemyView {
+                champ: ChampRef::from_id(e.champion_id, champs),
+                lane: e.lane.clone(),
+            })
+            .collect(),
+    }
+}
+
+pub fn review_game_view(row: &StoredReview, champs: &Champions, utc_offset_secs: i64) -> ReviewGameView {
+    let d = &row.draft;
+    let champ = ChampRef::from_id(d.my_champ, champs);
+    let result = match d.result.as_deref() {
+        Some("win") => Some(true),
+        Some("loss") => Some(false),
+        _ => None,
+    };
+    let mut view = ReviewGameView {
+        draft_id: d.id,
+        date: date_label(d.started, utc_offset_secs),
+        role: d.role.clone().unwrap_or_default(),
+        champ: champ.clone(),
+        result,
+        replayed: false,
+        board: None,
+        picked: None,
+        best_you: None,
+        best_anyone: None,
+        rows: Vec::new(),
+        left: None,
+        took_best: false,
+        verdict: "No board was saved for this game.".to_string(),
+        total: 0,
+    };
+    let Some(rec) = &row.review else {
+        return view;
+    };
+    view.replayed = rec.is_replayed();
+    view.board = Some(review_board_view(rec, champs));
+    view.total = rec.total;
+    if view.role.is_empty() {
+        view.role = rec.role.clone();
+    }
+
+    // Highest score first; on ties the better rank wins.
+    let best_you = rec
+        .options
+        .iter()
+        .min_by(|a, b| b.score.total_cmp(&a.score).then(a.rank.cmp(&b.rank)));
+    let best_anyone = rec
+        .options
+        .iter()
+        .min_by(|a, b| b.anyone.total_cmp(&a.anyone).then(a.rank.cmp(&b.rank)));
+    let picked = rec.options.iter().find(|o| o.champion_id == rec.my_champ);
+
+    let flag = |o: &ReviewOption| {
+        let mut v = review_option_view(o, champs);
+        v.is_picked = o.champion_id == rec.my_champ;
+        v.is_best_you = best_you.is_some_and(|b| b.champion_id == o.champion_id);
+        v.is_best_anyone = best_anyone.is_some_and(|b| b.champion_id == o.champion_id);
+        v
+    };
+    view.picked = picked.map(&flag);
+    view.best_you = best_you.map(&flag);
+    view.best_anyone = best_anyone.map(&flag);
+
+    let mut ranked: Vec<&ReviewOption> = rec.options.iter().collect();
+    ranked.sort_by_key(|o| o.rank);
+    view.rows = ranked
+        .iter()
+        .enumerate()
+        .filter(|(i, o)| {
+            *i < REVIEW_TABLE_ROWS
+                || o.champion_id == rec.my_champ
+                || best_anyone.is_some_and(|b| b.champion_id == o.champion_id)
+        })
+        .map(|(_, o)| flag(o))
+        .collect();
+
+    if let (Some(p), Some(b)) = (picked, best_you) {
+        let left = (b.score - p.score).max(0.0);
+        view.left = Some(left);
+        view.took_best = left < LEFT_EPS;
+        view.verdict = if view.took_best {
+            format!("{} was your best available pick.", champ.name)
+        } else {
+            format!(
+                "{} scored +{left:.1} better for you than {}.",
+                champs.name(b.champion_id),
+                champ.name
+            )
+        };
+    } else {
+        view.verdict = format!("{} has no data in this role at this tier.", champ.name);
+    }
+    view
+}
+
+pub fn review_list_view(
+    rows: &[StoredReview],
+    champs: &Champions,
+    cap: f64,
+    utc_offset_secs: i64,
+) -> ReviewListView {
+    let games: Vec<ReviewGameView> = rows
+        .iter()
+        .map(|r| review_game_view(r, champs, utc_offset_secs))
+        .collect();
+    let mut summary = ReviewSummaryView::default();
+    let mut left_sum = 0.0;
+    for g in &games {
+        if g.board.is_none() {
+            continue;
+        }
+        match g.result {
+            Some(true) => summary.wins += 1,
+            Some(false) => summary.losses += 1,
+            None => {}
+        }
+        if let Some(left) = g.left {
+            summary.scored += 1;
+            left_sum += left;
+            if g.took_best {
+                summary.best_taken += 1;
+            }
+        }
+    }
+    if summary.scored > 0 {
+        summary.avg_left = left_sum / summary.scored as f64;
+    }
+    ReviewListView { games, summary, cap }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1489,5 +1777,123 @@ mod tests {
         let v = picks_view(&eval(8, 7), &Champions::default(), &HashMap::new(), None, 3);
         let rows: Vec<(i32, usize)> = v.recs.iter().map(|r| (r.champ.id, r.rank)).collect();
         assert_eq!(rows, vec![(1, 0), (2, 1), (3, 2), (7, 6)]);
+    }
+
+    fn opt(cid: i32, rank: usize, score: f64, comfort: f64) -> ReviewOption {
+        ReviewOption {
+            champion_id: cid,
+            rank,
+            score,
+            comfort,
+            anyone: score - comfort,
+            vs: 0.0,
+            with: 0.0,
+            base: 0.0,
+            games: None,
+            wins: None,
+            mastery: None,
+        }
+    }
+
+    fn stored(id: i64, started: f64, champ: i32, result: Option<&str>, review: Option<ReviewRecord>) -> StoredReview {
+        StoredReview {
+            draft: crate::data::store::DraftRow {
+                id,
+                started,
+                role: Some("support".into()),
+                tier: Some("master_plus".into()),
+                my_champ: champ,
+                result: result.map(String::from),
+                game_id: None,
+            },
+            review,
+        }
+    }
+
+    fn record(champ: i32, options: Vec<ReviewOption>, source: &str) -> ReviewRecord {
+        ReviewRecord {
+            version: 1,
+            source: source.into(),
+            role: "support".into(),
+            tier: "master_plus".into(),
+            my_champ: champ,
+            mode: "blind".into(),
+            allies: vec![],
+            enemies: vec![],
+            bans: vec![],
+            picked_rank: options.iter().find(|o| o.champion_id == champ).map(|o| o.rank),
+            total: options.len(),
+            options,
+        }
+    }
+
+    #[test]
+    fn review_view_finds_best_for_you_and_for_anyone() {
+        // champion 3 is the best pick for anyone, 2 the best for this player (comfort), 1 was picked
+        let rec = record(
+            1,
+            vec![opt(2, 1, 3.0, 1.5), opt(3, 2, 2.5, 0.0), opt(1, 3, 1.0, 0.2)],
+            "live",
+        );
+        let g = review_game_view(&stored(1, 0.0, 1, Some("loss"), Some(rec)), &Champions::default(), 0);
+        assert_eq!(g.picked.as_ref().unwrap().champ.id, 1);
+        assert_eq!(g.best_you.as_ref().unwrap().champ.id, 2);
+        assert_eq!(g.best_anyone.as_ref().unwrap().champ.id, 3);
+        assert!((g.left.unwrap() - 2.0).abs() < 1e-9);
+        assert!(!g.took_best);
+        assert_eq!(g.verdict, "#2 scored +2.0 better for you than #1.");
+        assert_eq!(g.result, Some(false));
+        assert!(!g.replayed);
+        let tags: Vec<(i32, bool, bool, bool)> = g
+            .rows
+            .iter()
+            .map(|r| (r.champ.id, r.is_picked, r.is_best_you, r.is_best_anyone))
+            .collect();
+        assert_eq!(tags, vec![(2, false, true, false), (3, false, false, true), (1, true, false, false)]);
+    }
+
+    #[test]
+    fn review_view_keeps_the_pick_below_the_table_cutoff() {
+        let mut options: Vec<ReviewOption> =
+            (1..=12).map(|i| opt(100 + i as i32, i, 10.0 - i as f64, 0.0)).collect();
+        options.push(opt(7, 40, -5.0, 0.0));
+        let g = review_game_view(&stored(1, 0.0, 7, None, Some(record(7, options, "live"))), &Champions::default(), 0);
+        assert_eq!(g.rows.len(), REVIEW_TABLE_ROWS + 1);
+        assert_eq!(g.rows.last().unwrap().champ.id, 7);
+        assert_eq!(g.rows.last().unwrap().rank, 40);
+        assert_eq!(g.result, None);
+    }
+
+    #[test]
+    fn review_summary_counts_games_left_on_table_and_results() {
+        let best = record(1, vec![opt(1, 1, 2.0, 0.0), opt(2, 2, 1.0, 0.0)], "live");
+        let miss = record(2, vec![opt(1, 1, 3.0, 0.0), opt(2, 2, 1.0, 0.0)], "replayed");
+        let unranked = record(9, vec![opt(1, 1, 3.0, 0.0)], "live");
+        let rows = vec![
+            stored(4, 400.0, 5, Some("win"), None),
+            stored(3, 300.0, 9, Some("win"), Some(unranked)),
+            stored(2, 200.0, 2, Some("loss"), Some(miss)),
+            stored(1, 100.0, 1, Some("win"), Some(best)),
+        ];
+        let v = review_list_view(&rows, &Champions::default(), 1.5, 0);
+        assert_eq!(v.cap, 1.5);
+        assert_eq!(v.games.len(), 4);
+        assert_eq!(v.summary.scored, 2);
+        assert_eq!(v.summary.best_taken, 1);
+        assert!((v.summary.avg_left - 1.0).abs() < 1e-9);
+        // the game without a saved board does not count toward W-L
+        assert_eq!((v.summary.wins, v.summary.losses), (2, 1));
+        assert!(v.games[0].board.is_none());
+        assert!(v.games[2].replayed);
+        assert!(v.games[1].verdict.contains("no data"));
+        assert!(v.games[3].took_best);
+    }
+
+    #[test]
+    fn date_label_uses_the_offset() {
+        // 2026-03-04 23:30 UTC
+        let t = 1_772_667_000.0;
+        assert_eq!(date_label(t, 0), "Mar 4");
+        assert_eq!(date_label(t, 3600), "Mar 5");
     }
 }

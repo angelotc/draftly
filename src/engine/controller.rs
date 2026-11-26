@@ -11,6 +11,7 @@ use crate::domain::config::{Config, StreamConfig, data_dir, load_ui_settings, sa
 use crate::domain::lcu::LcuCreds;
 use crate::domain::live::{LiveGame, parse_live};
 use crate::domain::players::PlayerStats;
+use crate::domain::review::{SOURCE_LIVE, SOURCE_REPLAYED};
 use crate::domain::scoring::{ChampStats, Comfort, DraftOdds, LANES, draft_odds};
 use crate::domain::threat;
 use crate::domain::state::{Event, Session, Stage};
@@ -23,15 +24,19 @@ use crate::data::store::Store;
 use crate::data::stream::{LiveStreamer, StreamDraftPayload};
 
 use super::recommender::{BuildEvaluation, Evaluation, Recommender};
+use super::review::{build_review, decision_board};
 use super::views::{
-    ClientScreen, ExploreReportView, GameScreen, TIERS, bans_view, build_view,
-    explore_report_view, header_view, ingame_build_view, picks_view, players_view, stage_message,
+    ClientScreen, ExploreReportView, GameScreen, ReviewListView, TIERS, bans_view, build_view,
+    explore_report_view, header_view, ingame_build_view, local_offset_secs, picks_view,
+    players_view, review_list_view, stage_message,
 };
 
 pub const SYNC_EVERY: Duration = Duration::from_secs(20);
 pub const LIVE_POLL: Duration = Duration::from_secs(2);
 pub const PLAYERS_RETRY: Duration = Duration::from_secs(30);
 pub const STATS_RETRY: Duration = Duration::from_secs(30);
+/// Past drafts the review view lists, and how many of the newest ones backfill looks at.
+pub const REVIEW_DRAFTS: usize = 30;
 
 #[derive(Debug, Clone)]
 pub enum ScreenUpdate {
@@ -97,6 +102,7 @@ pub struct Controller {
     render_seq: AtomicU64,
     pub on_repaint: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
     pub lockfile_watch: Arc<tokio::sync::RwLock<String>>,
+    backfill: tokio::sync::Mutex<()>,
 }
 
 impl Controller {
@@ -154,6 +160,7 @@ impl Controller {
             render_seq: AtomicU64::new(0),
             on_repaint: Mutex::new(None),
             lockfile_watch: lockfile,
+            backfill: tokio::sync::Mutex::new(()),
         });
         (ctl, screen_rx)
     }
@@ -637,6 +644,122 @@ impl Controller {
         }));
     }
 
+    /// Save the review for the pick just locked in: the board as it was at lock-in
+    /// (`session.frozen`), not the current draft, scored against every candidate.
+    async fn record_review(&self) {
+        let (did, frozen, pickable, enemy_lanes) = {
+            let st = self.state.lock().unwrap();
+            (
+                st.draft_id,
+                st.session.frozen.clone(),
+                st.session.pickable.clone(),
+                st.session.enemy_lanes.clone(),
+            )
+        };
+        let (Some(did), Some(frozen), Some(store), Some(rec)) =
+            (did, frozen, self.store.clone(), self.get_rec())
+        else {
+            return;
+        };
+        let Some(role) = Recommender::role_for(&frozen) else {
+            return;
+        };
+        // Lock-in follows a render, so the pool is normally cached; never fetch it from here.
+        if !rec.has_pool(&role, None) {
+            return;
+        }
+        let comfort = self.comfort_for(&role);
+        let tier = rec.tier();
+        let ev = match rec
+            .evaluate_full(&frozen, pickable.as_ref(), Some(&enemy_lanes), &comfort, None)
+            .await
+        {
+            Ok(ev) => ev,
+            Err(e) => {
+                warn!("review scoring failed: {e}");
+                return;
+            }
+        };
+        let record = build_review(&ev, &comfort, frozen.my_locked, &tier, SOURCE_LIVE);
+        match serde_json::to_value(&record) {
+            Ok(v) => {
+                if let Err(e) = store.save_recs(did, "review", &v) {
+                    warn!("saving review failed: {e}");
+                }
+            }
+            Err(e) => warn!("encoding review failed: {e}"),
+        }
+    }
+
+    /// Rebuild reviews for recent drafts that locked a champion but have none, from the saved
+    /// LCU snapshots, scored with today's statistics. Returns how many were created. Slow (it may
+    /// load stats pools): call it from a spawned task, never from the UI thread.
+    pub async fn backfill_reviews(&self) -> usize {
+        let (Some(store), Some(rec)) = (self.store.clone(), self.get_rec()) else {
+            return 0;
+        };
+        // One backfill at a time, so two loads of the view cannot save the same draft twice.
+        let _guard = self.backfill.lock().await;
+        let live_draft = self.state.lock().unwrap().draft_id;
+        let mut made = 0;
+        for row in store.drafts_lacking_review(REVIEW_DRAFTS) {
+            if Some(row.id) == live_draft {
+                continue;
+            }
+            let Some(mut board) = decision_board(&store.snapshots(row.id)) else {
+                continue;
+            };
+            if Recommender::role_for(&board).is_none()
+                && let Some(r) = row.role.as_deref().filter(|r| LANES.contains(r))
+            {
+                board.my_position = r.to_string();
+            }
+            let Some(role) = Recommender::role_for(&board) else {
+                continue;
+            };
+            let tier = row
+                .tier
+                .clone()
+                .filter(|t| TIERS.iter().any(|&(id, _)| id == t))
+                .unwrap_or_else(|| rec.tier());
+            let comfort = self.comfort_for(&role);
+            let ev = match rec.evaluate_full(&board, None, None, &comfort, Some(&tier)).await {
+                Ok(ev) => ev,
+                Err(e) => {
+                    warn!("replaying draft {}: {e}", row.id);
+                    continue;
+                }
+            };
+            let record = build_review(&ev, &comfort, row.my_champ, &tier, SOURCE_REPLAYED);
+            if let Ok(v) = serde_json::to_value(&record)
+                && store.save_recs(row.id, "review", &v).is_ok()
+            {
+                made += 1;
+            }
+        }
+        if made > 0 {
+            info!("rebuilt {made} draft review(s) from saved snapshots");
+        }
+        made
+    }
+
+    /// The recorded drafts, ready to render. Cheap: reads the store only.
+    pub async fn review_list(&self) -> Result<ReviewListView, String> {
+        let store = self
+            .store
+            .clone()
+            .ok_or_else(|| "no draft history on this machine".to_string())?;
+        let rec = self.get_rec().ok_or_else(|| "stats not ready".to_string())?;
+        let cap = {
+            let st = self.state.lock().unwrap();
+            let mut c = crate::domain::config::ComfortConfig::default();
+            c.apply(&st.cfg.comfort);
+            c.cap
+        };
+        let rows = store.recent_reviews(REVIEW_DRAFTS);
+        Ok(review_list_view(&rows, &rec.champs, cap, local_offset_secs()))
+    }
+
     fn compute_odds(
         &self,
         self_arc: &Arc<Self>,
@@ -1026,6 +1149,7 @@ impl Controller {
                 let _ = store.update_draft(did, None, Some(my_locked), Some(&ev.role));
                 let _ = store.save_recs(did, "locked", &json!({"role": ev.role}));
             }
+            self.record_review().await;
         }
 
         if draft_ended {
@@ -1400,6 +1524,119 @@ mod tests {
             }
             _ => panic!("expected client screen"),
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Controller with a real temp-file store and a support pool holding only Thresh.
+    fn review_harness(name: &str) -> (Arc<Controller>, Arc<Store>, PathBuf, serde_json::Value) {
+        let dir = std::env::temp_dir().join(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Arc::new(Store::open(dir.join("s.sqlite")).unwrap());
+        let (ctl, _rx) = Controller::new(Config::default(), Some(Arc::clone(&store)));
+        let champs = Champions::from_json(&json!({"data": {"Thresh": {"key": "412", "id": "Thresh", "name": "Thresh", "image": {"full": "Thresh.png"}, "info": {"attack": 5, "magic": 6}, "tags": ["Support"]}}}), "1.0");
+        let lola = Lolalytics::with_cache_dir("master_plus", 14, dir.join("cache"));
+        let rec = Arc::new(Recommender::from_parts(Config::default(), champs, Assets::default(), lola));
+        let mut pool = HashMap::new();
+        pool.insert(
+            412,
+            ChampStats {
+                champion_id: 412,
+                lane: "support".into(),
+                wr: 51.0,
+                games: 10000,
+                avg_wr: Some(50.0),
+                matchups: HashMap::new(),
+                synergies: HashMap::new(),
+            },
+        );
+        rec.pools
+            .write()
+            .unwrap()
+            .insert(("master_plus".into(), "support".into()), Arc::new(pool));
+        *ctl.rec.lock().unwrap() = Some(rec);
+        let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/session.json");
+        let ses = serde_json::from_str(&std::fs::read_to_string(fixture_path).unwrap()).unwrap();
+        (ctl, store, dir, ses)
+    }
+
+    #[tokio::test]
+    async fn test_lock_in_saves_review_of_the_frozen_board() {
+        let (ctl, store, dir, open) = review_harness("draftly_test_ctl_review");
+        let mut locked = open.clone();
+        locked["actions"][1][2]["completed"] = json!(true);
+        locked["actions"][1][2]["championId"] = json!(412);
+        // a teammate (mid, cell 4) locks in only after the player did
+        let mut later = locked.clone();
+        later["myTeam"][4]["championId"] = json!(99);
+
+        ctl.on_phase("ChampSelect").await;
+        ctl.on_session(Some(&open), None).await;
+        ctl.on_session(Some(&locked), None).await;
+        ctl.on_session(Some(&later), None).await;
+
+        let rows = store.recent_reviews(5);
+        assert_eq!(rows.len(), 1);
+        let review = rows[0].review.as_ref().expect("review saved at lock-in");
+        assert_eq!(review.source, "live");
+        assert_eq!(review.my_champ, 412);
+        assert_eq!(review.role, "support");
+        let allies: Vec<(i32, bool)> = review.allies.iter().map(|a| (a.champion_id, a.locked)).collect();
+        assert!(allies.contains(&(222, true)));
+        assert!(allies.contains(&(64, false)));
+        assert!(!allies.iter().any(|a| a.0 == 99), "teammate who locked later is not on the board");
+        assert!(!allies.iter().any(|a| a.0 == 412), "the player is not an ally of themselves");
+        let mut enemies: Vec<i32> = review.enemies.iter().map(|e| e.champion_id).collect();
+        enemies.sort();
+        assert_eq!(enemies, vec![51, 111]);
+        assert!(review.bans.contains(&157));
+        assert_eq!(review.picked_rank, Some(1));
+        assert_eq!(review.total, 1);
+        let picked = review.options.iter().find(|o| o.champion_id == 412).unwrap();
+        assert_eq!(picked.rank, 1);
+        assert!((picked.anyone + picked.comfort - picked.score).abs() < 1e-9);
+        // the existing marker row is still written alongside the review
+        ctl.on_phase("InProgress").await;
+        assert_eq!(store.recent_reviews(5)[0].draft.my_champ, 412);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_backfill_replays_saved_snapshots() {
+        let (ctl, store, dir, open) = review_harness("draftly_test_ctl_backfill");
+        let mut locked = open.clone();
+        locked["actions"][1][2]["completed"] = json!(true);
+        locked["actions"][1][2]["championId"] = json!(412);
+
+        // a draft recorded before reviews existed: board, then lock-in
+        let replay = store.start_draft(Some("support"), "master_plus").unwrap();
+        store.snapshot(replay, &open).unwrap();
+        store.snapshot(replay, &locked).unwrap();
+        store.update_draft(replay, Some(1000.0), Some(412), Some("support")).unwrap();
+        // a draft whose snapshots never show the player locking in
+        let never = store.start_draft(Some("support"), "master_plus").unwrap();
+        store.snapshot(never, &open).unwrap();
+        store.update_draft(never, Some(1000.0), Some(412), Some("support")).unwrap();
+        // a draft that was already locked in the first snapshot: no board to rebuild
+        let no_board = store.start_draft(Some("support"), "master_plus").unwrap();
+        store.snapshot(no_board, &locked).unwrap();
+        store.update_draft(no_board, Some(1000.0), Some(412), Some("support")).unwrap();
+
+        assert_eq!(ctl.backfill_reviews().await, 1);
+        assert_eq!(ctl.backfill_reviews().await, 0, "nothing left to rebuild");
+
+        let rows = store.recent_reviews(10);
+        let by_id = |id: i64| rows.iter().find(|r| r.draft.id == id).unwrap();
+        let r = by_id(replay).review.as_ref().expect("replayed review");
+        assert_eq!(r.source, "replayed");
+        assert_eq!(r.my_champ, 412);
+        assert_eq!(r.picked_rank, Some(1));
+        assert!(r.allies.iter().any(|a| a.champion_id == 222));
+        assert!(by_id(never).review.is_none());
+        assert!(by_id(no_board).review.is_none());
+
+        let list = ctl.review_list().await.unwrap();
+        assert_eq!(list.games.len(), 3);
+        assert!(list.games.iter().find(|g| g.draft_id == replay).unwrap().replayed);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

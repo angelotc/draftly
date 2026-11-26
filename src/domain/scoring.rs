@@ -117,6 +117,13 @@ pub fn comfort_terms(s: &ChampStats, c: Option<&Comfort>, w: &ComfortConfig) -> 
             tentative: false,
         });
     }
+    let total: f64 = out.iter().map(|c| c.weighted).sum();
+    if w.cap >= 0.0 && total.abs() > w.cap {
+        let scale = w.cap / total.abs();
+        for c in &mut out {
+            c.weighted *= scale;
+        }
+    }
     out
 }
 
@@ -218,6 +225,7 @@ pub struct Blind {
     pub coverage: f64,
     pub counters: Vec<(i32, f64, u32)>,
     pub synergy: f64,
+    pub comfort: f64,
     pub known_tail: f64,
 }
 
@@ -288,6 +296,7 @@ pub fn blind_safety(
         coverage: cov,
         counters,
         synergy: 0.0,
+        comfort: 0.0,
         known_tail: known,
     })
 }
@@ -687,6 +696,37 @@ mod tests {
             matchups: HashMap::new(),
             synergies: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn comfort_total_is_clamped_to_cap_in_both_directions() {
+        let s = stats(1, 50.0, 10000);
+        let w = ComfortConfig::default();
+        assert_eq!(w.cap, 1.5);
+        let sum = |c: &Comfort| comfort_terms(&s, Some(c), &w).iter().map(|t| t.weighted).sum::<f64>();
+
+        let hot = Comfort { games: 1000, wins: 800, mastery: 1_000_000, ..Default::default() };
+        let terms = comfort_terms(&s, Some(&hot), &w);
+        assert_eq!(terms.len(), 2);
+        assert!((sum(&hot) - 1.5).abs() < 1e-9);
+        // both parts are scaled by the same factor, keeping their ratio
+        assert!(terms[0].weighted > terms[1].weighted && terms[1].weighted > 0.0);
+
+        let cold = Comfort { games: 1000, wins: 200, mastery: 0, ..Default::default() };
+        assert!((sum(&cold) + 1.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn comfort_below_cap_is_untouched() {
+        let s = stats(1, 50.0, 10000);
+        let w = ComfortConfig::default();
+        let c = Comfort { games: 3, wins: 2, mastery: 5000, ..Default::default() };
+        let terms = comfort_terms(&s, Some(&c), &w);
+        let expect_you = shrink(100.0 * 2.0 / 3.0 - 50.0, 3.0, w.k) * w.history * w.weight;
+        let expect_mastery = (6.0_f64.ln() * w.mastery).min(w.mastery_cap) * w.weight;
+        assert!(expect_you + expect_mastery < w.cap);
+        assert!((terms[0].weighted - expect_you).abs() < 1e-9);
+        assert!((terms[1].weighted - expect_mastery).abs() < 1e-9);
     }
 
     #[test]
