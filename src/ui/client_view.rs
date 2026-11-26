@@ -20,6 +20,9 @@ pub enum DraftTab {
     Bans,
     Picks,
     Build,
+    /// Idle views, reachable during the draft but never the auto tab.
+    Explore,
+    Review,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,6 +69,7 @@ struct TabFlags {
     picks: bool,
     blind: bool,
     build: bool,
+    explore: bool,
 }
 
 // Returns (auto tab, active tab, pick mode); resets stale choices in `st`.
@@ -88,6 +92,7 @@ fn resolve_tabs(st: &mut ClientUiState, f: TabFlags) -> (Option<DraftTab>, Optio
             DraftTab::Bans => f.bans,
             DraftTab::Picks => f.picks,
             DraftTab::Build => f.build,
+            DraftTab::Explore | DraftTab::Review => f.explore,
         };
         if !valid {
             st.chosen_tab = None;
@@ -248,7 +253,7 @@ pub fn render_client(
 
     let (auto_tab, active_tab, pick_mode) = resolve_tabs(
         st,
-        TabFlags { bans: has_bans, picks: has_picks, blind: has_blind, build: has_build },
+        TabFlags { bans: has_bans, picks: has_picks, blind: has_blind, build: has_build, explore: s.explore },
     );
 
     if auto_tab.is_some() {
@@ -257,6 +262,7 @@ pub fn render_client(
             .inner_margin(egui::Margin::symmetric(14, 5))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
+                    let has_idle = s.explore;
                     let tabs = [
                         (DraftTab::Bans, "Bans", has_bans),
                         (DraftTab::Picks, "Picks", has_picks),
@@ -265,8 +271,17 @@ pub fn render_client(
                             if has_build { "Build" } else { "Build · after lock-in" },
                             has_build,
                         ),
+                        (DraftTab::Explore, "Explore", has_idle),
+                        (DraftTab::Review, "Review", has_idle),
                     ];
                     for (tab, lbl, enabled) in tabs {
+                        if matches!(tab, DraftTab::Explore | DraftTab::Review) && !enabled {
+                            continue;
+                        }
+                        if tab == DraftTab::Explore {
+                            ui.label(RichText::new("|").size(12.0).color(DIM));
+                            ui.add_space(10.0);
+                        }
                         let active = active_tab == Some(tab);
                         let is_auto = auto_tab == Some(tab);
                         ui.add_enabled_ui(enabled, |ui| {
@@ -296,6 +311,9 @@ pub fn render_client(
                             }
                             if resp.clicked() && enabled {
                                 st.chosen_tab = if is_auto { None } else { Some(tab) };
+                                if tab == DraftTab::Review {
+                                    st.review.activate(ctl, ui.ctx());
+                                }
                             }
                         });
                         ui.add_space(10.0);
@@ -380,6 +398,8 @@ pub fn render_client(
                                 render_build(ui, b, &mut st.build, imgs);
                             }
                         }
+                        DraftTab::Explore => render_explore(ui, ctl, &s.header.tier_id, &mut st.explore, imgs),
+                        DraftTab::Review => render_review(ui, ctl, &mut st.review, imgs),
                     }
                 } else if s.explore {
                     ui.horizontal(|ui| {
@@ -716,7 +736,7 @@ mod tests {
     use super::*;
 
     fn flags(bans: bool, picks: bool, blind: bool, build: bool) -> TabFlags {
-        TabFlags { bans, picks, blind, build }
+        TabFlags { bans, picks, blind, build, explore: true }
     }
 
     fn state() -> ClientUiState {
@@ -739,6 +759,17 @@ mod tests {
         st.chosen_mode = Some(PickMode::Best);
         let (_, _, mode) = resolve_tabs(&mut st, flags(false, true, true, false));
         assert_eq!(mode, PickMode::Best);
+    }
+
+    #[test]
+    fn idle_tab_stays_until_draft_step_changes() {
+        let mut st = ClientUiState::default();
+        resolve_tabs(&mut st, flags(true, true, false, false));
+        st.chosen_tab = Some(DraftTab::Review);
+        let (_, active, _) = resolve_tabs(&mut st, flags(true, true, false, false));
+        assert_eq!(active, Some(DraftTab::Review));
+        let (auto, active, _) = resolve_tabs(&mut st, flags(false, true, false, false));
+        assert_eq!((auto, active), (Some(DraftTab::Picks), Some(DraftTab::Picks)));
     }
 
     #[test]

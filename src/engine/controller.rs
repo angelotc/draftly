@@ -637,7 +637,8 @@ impl Controller {
             bans,
             picks: Some(picks),
             build,
-            explore: false,
+            // Explore/Review stay reachable as extra tabs during the draft.
+            explore: true,
             updated_hms: current_hms(),
             live_url,
             auto_copy_live_url,
