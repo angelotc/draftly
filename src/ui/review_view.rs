@@ -345,7 +345,8 @@ fn render_game_list(ui: &mut Ui, rect: Rect, list: &ReviewListView, selected: &m
                 let mut icon_ui = ui.new_child(egui::UiBuilder::new().max_rect(icon));
                 imgs.paint_icon(&mut icon_ui, &g.champ.name, &g.champ.icon, icon.size(), 5.0, Color32::WHITE);
 
-                // Right edge: score badge, with a "Best" marker above it when the pick was rank 1.
+                // Right edge: score badge, vertically centered so every row's score lines up.
+                // The "Best" marker sits inline on the name line instead.
                 let badge_w = 52.0;
                 let badge_rect = Rect::from_min_max(
                     Pos2::new(row.right() - badge_w - 6.0, row.top() + 4.0),
@@ -354,14 +355,10 @@ fn render_game_list(ui: &mut Ui, rect: Rect, list: &ReviewListView, selected: &m
                 let mut badge_ui = ui.new_child(
                     egui::UiBuilder::new()
                         .max_rect(badge_rect)
-                        .layout(Layout::top_down(Align::Max)),
+                        .layout(Layout::right_to_left(Align::Center)),
                 );
-                badge_ui.spacing_mut().item_spacing.y = 2.0;
                 match &g.picked {
                     Some(p) => {
-                        if g.took_best {
-                            chip(&mut badge_ui, "Best", ACCENT);
-                        }
                         score_badge(&mut badge_ui, p.score).on_hover_text("Score of your pick, for you");
                     }
                     None => {
@@ -389,7 +386,21 @@ fn render_game_list(ui: &mut Ui, rect: Rect, list: &ReviewListView, selected: &m
                     Some(false) => "L",
                     None => res_txt,
                 };
-                p.text(res_pos, egui::Align2::LEFT_TOP, short, res_font, res_col);
+                let res_rect = p.text(res_pos, egui::Align2::LEFT_TOP, short, res_font, res_col);
+                if g.took_best && g.picked.is_some() {
+                    let best_galley = p.layout_no_wrap("Best".to_owned(), strong_font(9.5), ACCENT);
+                    let chip_rect = Rect::from_min_size(
+                        Pos2::new(res_rect.right() + 6.0, row.center().y - 14.0),
+                        best_galley.size() + Vec2::new(10.0, 2.0),
+                    );
+                    p.rect_stroke(
+                        chip_rect,
+                        CornerRadius::same(8),
+                        Stroke::new(1.0, ACCENT.gamma_multiply(0.6)),
+                        egui::StrokeKind::Inside,
+                    );
+                    p.galley(chip_rect.min + Vec2::new(5.0, 1.0), best_galley, ACCENT);
+                }
                 let mut sub = format!("{} · {}", role_name(&g.role), g.date);
                 if g.replayed {
                     sub.push_str(" · rebuilt");
