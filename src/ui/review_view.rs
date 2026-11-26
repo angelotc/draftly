@@ -41,6 +41,8 @@ pub struct ReviewUiState {
     tx: mpsc::UnboundedSender<ReviewMsg>,
     rx: mpsc::UnboundedReceiver<ReviewMsg>,
     started: bool,
+    /// Account the older drafts were last rebuilt for; a new account gets its own rebuild.
+    backfilled_for: Option<Option<String>>,
     last_fetch: Option<Instant>,
 }
 
@@ -55,6 +57,7 @@ impl Default for ReviewUiState {
             tx,
             rx,
             started: false,
+            backfilled_for: None,
             last_fetch: None,
         }
     }
@@ -81,11 +84,14 @@ impl ReviewUiState {
         });
     }
 
-    /// Call when the view is opened: the first time it also backfills; later it just refreshes.
+    /// Call when the view is opened: the first time for each account it also backfills; later
+    /// it just refreshes.
     pub fn activate(&mut self, ctl: &Arc<Controller>, ctx: &egui::Context) {
-        let first = !self.started;
         self.started = true;
-        self.trigger_load(ctl, ctx, first);
+        let account = ctl.store.as_ref().and_then(|s| s.account());
+        let backfill = self.backfilled_for.as_ref() != Some(&account);
+        self.backfilled_for = Some(account);
+        self.trigger_load(ctl, ctx, backfill);
     }
 
     fn poll(&mut self, ctl: &Arc<Controller>, ctx: &egui::Context) {

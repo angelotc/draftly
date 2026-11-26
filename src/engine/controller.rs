@@ -1074,6 +1074,13 @@ impl Controller {
         }
 
         if draft_started && let Some(store) = &self.store {
+            // Stamp the draft with whoever is logged in now, even right after an account switch.
+            let lockfile = self.state.lock().unwrap().cfg.lockfile.clone();
+            if let Ok(creds) = read_lockfile(Some(&lockfile))
+                && self.refresh_account(&LcuClient::new(&creds)).await
+            {
+                self.clone().start_sync(0.0);
+            }
             let tier = self.tier();
             let role = {
                 let st = self.state.lock().unwrap();
@@ -1244,6 +1251,39 @@ impl Controller {
         });
     }
 
+    /// Points the store at the account logged into the client. Returns true when it changed
+    /// from a different known account; that account's mastery is dropped and the sync throttle
+    /// reset so the new account's data loads on the next sync.
+    async fn refresh_account(&self, client: &LcuClient) -> bool {
+        let Some(store) = &self.store else {
+            return false;
+        };
+        let Ok(r) = client.get("/lol-summoner/v1/current-summoner", None).await else {
+            return false;
+        };
+        let puuid = match r.json::<serde_json::Value>().await {
+            Ok(v) => v.get("puuid").and_then(|p| p.as_str()).unwrap_or_default().to_string(),
+            Err(_) => return false,
+        };
+        let prev = store.account();
+        if puuid.is_empty() || prev.as_deref() == Some(puuid.as_str()) {
+            return false;
+        }
+        if let Err(e) = store.set_account(&puuid) {
+            warn!("switching store account: {e}");
+            return false;
+        }
+        save_ui_settings(|s| s.account = Some(puuid.clone()));
+        if prev.is_none() {
+            return false;
+        }
+        info!("League account changed; scoping history to the new account");
+        let mut st = self.state.lock().unwrap();
+        st.mastery.clear();
+        st.synced_at = None;
+        true
+    }
+
     fn start_sync(self: Arc<Self>, delay_secs: f64) {
         let Some(store) = self.store.clone() else {
             return;
@@ -1262,6 +1302,8 @@ impl Controller {
             }
             if let Ok(creds) = read_lockfile(Some(&lockfile)) {
                 let client = LcuClient::new(&creds);
+                // Who is logged in decides whose games we store and whose mastery we load.
+                self.refresh_account(&client).await;
                 let m = fetch_mastery(&client).await;
                 if !m.is_empty() {
                     self.state.lock().unwrap().mastery = m;

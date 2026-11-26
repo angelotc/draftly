@@ -493,6 +493,8 @@ pub struct UiSettings {
     pub tier: Option<String>,
     pub window_rect: Option<[i32; 4]>,
     pub detailed_rows: bool,
+    /// Last logged-in League account (puuid), so history stays scoped while the client is closed.
+    pub account: Option<String>,
 }
 
 pub fn load_ui_settings() -> UiSettings {

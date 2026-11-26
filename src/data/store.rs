@@ -108,6 +108,36 @@ fn draft_row(r: &rusqlite::Row) -> rusqlite::Result<DraftRow> {
 pub struct Store {
     db: Mutex<Connection>,
     last_hash: Mutex<HashMap<i64, [u8; 20]>>,
+    /// The logged-in League account (puuid). New drafts and games are stamped with it, and
+    /// reads only return that account's rows. `None` (never seen a client) reads everything.
+    account: Mutex<Option<String>>,
+}
+
+/// Rows belonging to the current account; `?1` is the account (NULL matches all rows).
+const MINE: &str = "(?1 IS NULL OR puuid = ?1)";
+
+fn has_column(conn: &Connection, table: &str, col: &str) -> rusqlite::Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let names = stmt.query_map([], |r| r.get::<_, String>(1))?;
+    for n in names {
+        if n? == col {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Adds the `puuid` account column to stores created before accounts were tracked.
+fn migrate(conn: &Connection) -> rusqlite::Result<()> {
+    for table in ["drafts", "games"] {
+        if !has_column(conn, table, "puuid")? {
+            conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN puuid TEXT;"))?;
+        }
+    }
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS drafts_puuid ON drafts(puuid, started);
+         CREATE INDEX IF NOT EXISTS games_puuid ON games(puuid);",
+    )
 }
 
 impl Store {
@@ -123,17 +153,47 @@ impl Store {
         let conn = Connection::open(p)?;
         conn.execute_batch("PRAGMA journal_mode=WAL;")?;
         conn.execute_batch(SCHEMA)?;
+        migrate(&conn)?;
         Ok(Self {
             db: Mutex::new(conn),
             last_hash: Mutex::new(HashMap::new()),
+            account: Mutex::new(None),
         })
     }
 
+    pub fn account(&self) -> Option<String> {
+        self.account.lock().unwrap().clone()
+    }
+
+    /// Switches the store to `puuid`. The first account ever seen also claims the rows
+    /// recorded before accounts were tracked; later accounts leave them alone.
+    pub fn set_account(&self, puuid: &str) -> Result<(), rusqlite::Error> {
+        if puuid.is_empty() {
+            return Ok(());
+        }
+        {
+            let db = self.db.lock().unwrap();
+            let owned: i64 = db.query_row(
+                "SELECT (SELECT COUNT(*) FROM drafts WHERE puuid IS NOT NULL) \
+                      + (SELECT COUNT(*) FROM games WHERE puuid IS NOT NULL)",
+                [],
+                |r| r.get(0),
+            )?;
+            if owned == 0 {
+                db.execute("UPDATE drafts SET puuid=?1 WHERE puuid IS NULL", params![puuid])?;
+                db.execute("UPDATE games SET puuid=?1 WHERE puuid IS NULL", params![puuid])?;
+            }
+        }
+        *self.account.lock().unwrap() = Some(puuid.to_string());
+        Ok(())
+    }
+
     pub fn start_draft(&self, role: Option<&str>, tier: &str) -> Result<i64, rusqlite::Error> {
+        let acct = self.account();
         let db = self.db.lock().unwrap();
         db.execute(
-            "INSERT INTO drafts(started, role, tier) VALUES (?,?,?)",
-            params![now_secs(), role, tier],
+            "INSERT INTO drafts(started, role, tier, puuid) VALUES (?,?,?,?)",
+            params![now_secs(), role, tier, acct],
         )?;
         Ok(db.last_insert_rowid())
     }
@@ -212,21 +272,26 @@ impl Store {
         detail: &Value,
     ) -> Result<(), rusqlite::Error> {
         let s = serde_json::to_string(detail).unwrap_or_default();
+        let acct = self.account();
         let db = self.db.lock().unwrap();
         db.execute(
-            "INSERT OR IGNORE INTO games VALUES (?,?,?,?,?,?,?,?)",
-            params![game_id, created, queue, champ, role, i32::from(win), duration, s],
+            "INSERT OR IGNORE INTO games(game_id, created, queue, champ, role, win, duration, detail, puuid) \
+             VALUES (?,?,?,?,?,?,?,?,?)",
+            params![game_id, created, queue, champ, role, i32::from(win), duration, s, acct],
         )?;
         Ok(())
     }
 
     pub fn draft_role_for(&self, champ: i32, created: f64) -> Option<String> {
+        let acct = self.account();
         let db = self.db.lock().unwrap();
         let res: Option<Option<String>> = db
             .query_row(
-                "SELECT role FROM drafts WHERE my_champ=? AND ended IS NOT NULL \
-                 AND ended BETWEEN ? AND ? ORDER BY ABS(? - ended) LIMIT 1",
-                params![champ, created - DRAFT_GAME_WINDOW, created + 60.0, created],
+                &format!(
+                    "SELECT role FROM drafts WHERE {MINE} AND my_champ=?2 AND ended IS NOT NULL \
+                     AND ended BETWEEN ?3 AND ?4 ORDER BY ABS(?5 - ended) LIMIT 1"
+                ),
+                params![acct, champ, created - DRAFT_GAME_WINDOW, created + 60.0, created],
                 |r| r.get(0),
             )
             .optional()
@@ -236,12 +301,15 @@ impl Store {
     }
 
     pub fn link_draft(&self, game_id: i64, champ: i32, created: f64, win: bool) -> Result<(), rusqlite::Error> {
+        let acct = self.account();
         let db = self.db.lock().unwrap();
         let id: Option<i64> = db
             .query_row(
-                "SELECT id FROM drafts WHERE game_id IS NULL AND my_champ=? AND ended IS NOT NULL \
-                 AND ended BETWEEN ? AND ? ORDER BY ABS(? - ended) LIMIT 1",
-                params![champ, created - DRAFT_GAME_WINDOW, created + 60.0, created],
+                &format!(
+                    "SELECT id FROM drafts WHERE {MINE} AND game_id IS NULL AND my_champ=?2 \
+                     AND ended IS NOT NULL AND ended BETWEEN ?3 AND ?4 ORDER BY ABS(?5 - ended) LIMIT 1"
+                ),
+                params![acct, champ, created - DRAFT_GAME_WINDOW, created + 60.0, created],
                 |r| r.get(0),
             )
             .optional()?;
@@ -257,13 +325,15 @@ impl Store {
 
     /// Most recent drafts (newest first) that have a picked champion, each with its latest review.
     pub fn recent_reviews(&self, limit: usize) -> Vec<StoredReview> {
+        let acct = self.account();
         let db = self.db.lock().unwrap();
         let Ok(mut stmt) = db.prepare(&format!(
-            "SELECT {DRAFT_COLS} FROM drafts WHERE my_champ IS NOT NULL AND my_champ != 0              ORDER BY started DESC, id DESC LIMIT ?"
+            "SELECT {DRAFT_COLS} FROM drafts WHERE {MINE} AND my_champ IS NOT NULL AND my_champ != 0 \
+             ORDER BY started DESC, id DESC LIMIT ?2"
         )) else {
             return Vec::new();
         };
-        let Ok(rows) = stmt.query_map(params![limit as i64], draft_row) else {
+        let Ok(rows) = stmt.query_map(params![acct, limit as i64], draft_row) else {
             return Vec::new();
         };
         let drafts: Vec<DraftRow> = rows.filter_map(|r| r.ok()).collect();
@@ -287,13 +357,17 @@ impl Store {
 
     /// Among the `recent` newest drafts with a picked champion, those with no "review" row yet.
     pub fn drafts_lacking_review(&self, recent: usize) -> Vec<DraftRow> {
+        let acct = self.account();
         let db = self.db.lock().unwrap();
         let Ok(mut stmt) = db.prepare(&format!(
-            "SELECT {DRAFT_COLS} FROM (SELECT {DRAFT_COLS} FROM drafts              WHERE my_champ IS NOT NULL AND my_champ != 0 ORDER BY started DESC, id DESC LIMIT ?)              WHERE id NOT IN (SELECT draft_id FROM recommendations WHERE kind='review')              ORDER BY started DESC, id DESC"
+            "SELECT {DRAFT_COLS} FROM (SELECT {DRAFT_COLS} FROM drafts \
+             WHERE {MINE} AND my_champ IS NOT NULL AND my_champ != 0 ORDER BY started DESC, id DESC LIMIT ?2) \
+             WHERE id NOT IN (SELECT draft_id FROM recommendations WHERE kind='review') \
+             ORDER BY started DESC, id DESC"
         )) else {
             return Vec::new();
         };
-        let Ok(rows) = stmt.query_map(params![recent as i64], draft_row) else {
+        let Ok(rows) = stmt.query_map(params![acct, recent as i64], draft_row) else {
             return Vec::new();
         };
         rows.filter_map(|r| r.ok()).collect()
@@ -314,14 +388,15 @@ impl Store {
     }
 
     pub fn top_roles(&self, limit: usize) -> Vec<String> {
+        let acct = self.account();
         let db = self.db.lock().unwrap();
-        let Ok(mut stmt) = db.prepare(
-            "SELECT role FROM games WHERE role IS NOT NULL AND role != '' \
-             GROUP BY role ORDER BY COUNT(*) DESC LIMIT ?",
-        ) else {
+        let Ok(mut stmt) = db.prepare(&format!(
+            "SELECT role FROM games WHERE {MINE} AND role IS NOT NULL AND role != '' \
+             GROUP BY role ORDER BY COUNT(*) DESC LIMIT ?2"
+        )) else {
             return Vec::new();
         };
-        let Ok(rows) = stmt.query_map(params![limit as i64], |r| r.get::<_, String>(0)) else {
+        let Ok(rows) = stmt.query_map(params![acct, limit as i64], |r| r.get::<_, String>(0)) else {
             return Vec::new();
         };
         rows.filter_map(|r| r.ok()).collect()
@@ -333,6 +408,7 @@ impl Store {
         role: Option<&str>,
         half_life_days: f64,
     ) -> HashMap<i32, (u32, u32, f64, f64)> {
+        let acct = self.account();
         let db = self.db.lock().unwrap();
         let mut out: HashMap<i32, (u32, u32, f64, f64)> = HashMap::new();
         let now = now_secs();
@@ -359,21 +435,12 @@ impl Store {
             }
         };
 
-        if let Some(r) = role {
-            if let Ok(mut stmt) = db.prepare("SELECT champ, win, created FROM games WHERE role=?")
-                && let Ok(rows) = stmt.query_map(params![r], |row| {
-                    Ok((row.get::<_, i32>(0)?, row.get::<_, i32>(1)?, row.get::<_, f64>(2)?))
-                })
-            {
-                for row in rows.flatten() {
-                    push_row(row.0, row.1, row.2);
-                }
-            }
-        } else if let Ok(mut stmt) = db.prepare("SELECT champ, win, created FROM games")
-            && let Ok(rows) = stmt.query_map([], |row| {
-                Ok((row.get::<_, i32>(0)?, row.get::<_, i32>(1)?, row.get::<_, f64>(2)?))
-            })
-        {
+        // `?2` NULL means every role.
+        if let Ok(mut stmt) = db.prepare(&format!(
+            "SELECT champ, win, created FROM games WHERE {MINE} AND (?2 IS NULL OR role = ?2)"
+        )) && let Ok(rows) = stmt.query_map(params![acct, role], |row| {
+            Ok((row.get::<_, i32>(0)?, row.get::<_, i32>(1)?, row.get::<_, f64>(2)?))
+        }) {
             for row in rows.flatten() {
                 push_row(row.0, row.1, row.2);
             }
@@ -458,6 +525,74 @@ mod tests {
 
         let lacking: Vec<i64> = store.drafts_lacking_review(10).iter().map(|d| d.id).collect();
         assert_eq!(lacking, vec![b]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A locked-in draft for `champ` that ended at `ended`.
+    fn locked_draft(store: &Store, champ: i32, ended: f64) -> i64 {
+        let d = store.start_draft(Some("support"), "master_plus").unwrap();
+        store.update_draft(d, Some(ended), Some(champ), Some("support")).unwrap();
+        d
+    }
+
+    #[test]
+    fn test_history_is_scoped_to_the_logged_in_account() {
+        let dir = std::env::temp_dir().join("draftly_test_store_accounts");
+        let _ = fs::remove_dir_all(&dir);
+        let store = Store::open(dir.join("s.sqlite")).unwrap();
+
+        // Recorded before accounts were tracked: the first account seen claims it.
+        let legacy = locked_draft(&store, 1, 100.0);
+        store.add_game(10, 150.0, 420, 1, "support", true, 1800, &json!({})).unwrap();
+        store.set_account("main").unwrap();
+        let main_draft = locked_draft(&store, 2, 200.0);
+
+        // A second account claims nothing and sees only its own rows.
+        store.set_account("alt").unwrap();
+        let alt_draft = locked_draft(&store, 3, 300.0);
+        store.add_game(11, 350.0, 420, 3, "middle", false, 1800, &json!({})).unwrap();
+        store.link_draft(11, 3, 350.0, false).unwrap();
+        let ids = |s: &Store| s.recent_reviews(10).iter().map(|r| r.draft.id).collect::<Vec<_>>();
+        assert_eq!(ids(&store), vec![alt_draft]);
+        assert_eq!(store.drafts_lacking_review(10).len(), 1);
+        assert_eq!(store.top_roles(5), vec!["middle"]);
+        assert_eq!(store.champ_record(None, 0.0).keys().copied().collect::<Vec<_>>(), vec![3]);
+        assert_eq!(store.draft_role_for(1, 150.0), None, "main's draft is not the alt's");
+
+        // Switching back restores the main's history, including the claimed legacy rows.
+        store.set_account("main").unwrap();
+        assert_eq!(ids(&store), vec![main_draft, legacy]);
+        assert_eq!(store.top_roles(5), vec!["support"]);
+        assert!(store.champ_record(None, 0.0).contains_key(&1));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_old_store_gains_the_account_column() {
+        let dir = std::env::temp_dir().join("draftly_test_store_migrate");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("s.sqlite");
+        {
+            // The pre-account schema, with one locked draft and one game.
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(SCHEMA).unwrap();
+            conn.execute_batch(
+                "INSERT INTO drafts(started, ended, role, tier, my_champ) VALUES (1, 2, 'support', 'master_plus', 7);
+                 INSERT INTO games VALUES (5, 3, 420, 7, 'support', 1, 1800, '{}');",
+            )
+            .unwrap();
+        }
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.recent_reviews(10).len(), 1, "no account yet: everything is visible");
+        store.set_account("main").unwrap();
+        assert_eq!(store.recent_reviews(10).len(), 1);
+        assert_eq!(store.top_roles(5), vec!["support"]);
+        drop(store);
+        // Reopening an already-migrated store is a no-op.
+        let store = Store::open(&path).unwrap();
+        store.set_account("main").unwrap();
+        assert_eq!(store.recent_reviews(10).len(), 1);
         let _ = fs::remove_dir_all(&dir);
     }
 

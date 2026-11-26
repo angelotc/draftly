@@ -887,6 +887,12 @@ fn main() {
     } else {
         None
     };
+    // Scope history to the last account seen until the client tells us who is logged in.
+    if let (Some(s), Some(acct)) = (&store, domain::config::load_ui_settings().account)
+        && let Err(e) = s.set_account(&acct)
+    {
+        eprintln!("could not set store account: {e}");
+    }
 
     domain::hotkey::set_current(cfg.hotkey());
     let (ctl, screen_rx) = Controller::new(cfg, store);
