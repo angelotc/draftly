@@ -110,6 +110,20 @@ The blind-pick explorer plots champion strength against counter risk for any rol
 your most-played role. Click a champion to see its worst counters. The app preloads stats for
 your usual roles and switches to your selected roles when you queue.
 
+#### Draft review
+
+<img src="docs/views/review.png" alt="Draft review: your recent drafts, each pick's score for you, and the board and options when you locked in">
+
+**Draft review** grades your last 30 drafts. Each one shows the champion you locked, the result,
+and your pick's score for you, marked **Best** when it was the top option you had. Up top, see how
+often you took your best pick, the average score you left on the table, and your record.
+
+Click a draft to see the board when you picked, your pick beside the best pick for you and for
+anyone, and the full table of options with their **For anyone**, **Comfort** and **For you**
+scores. Drafts saved before a review existed are rebuilt from the saved draft with today's stats
+and marked **rebuilt**. History follows the account you're logged into, so an alt's drafts never
+mix with your main's.
+
 ## Settings
 
 <img src="docs/views/settings.png" width="480" alt="Settings in the plum and lavender theme">
